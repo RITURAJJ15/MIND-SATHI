@@ -1,0 +1,351 @@
+import { CognitiveDomain, DifficultyTier, GameId, GameSession } from '../types/game';
+import { authService } from './authService';
+import { profileService } from './profileService';
+import { soundService } from './soundService';
+import { dailyPlanService } from './dailyPlanService';
+import { supabase } from '../lib/supabase';
+import { offlineDb } from '../lib/offlineDb';
+import { syncService } from './syncService';
+
+const STORAGE_KEY_SESSIONS = 'mind_sathi_game_sessions';
+
+// Default initial sessions to populate charts if fresh start
+const DEFAULT_INITIAL_SESSIONS: GameSession[] = [
+  {
+    id: 'sess-1',
+    gameId: 'smriti_sangam',
+    userId: 'elder-1',
+    timestamp: '2026-08-30T09:15:00Z',
+    durationSeconds: 160,
+    score: 85,
+    accuracy: 90,
+    reactionTimeMs: 1420,
+    difficulty: 'saral',
+    completed: true,
+    xpEarned: 60,
+    mistakesCount: 1,
+    hintsUsed: 0,
+    domainScores: { memory: 88, language: 75, working_memory: 80, executive: 70, attention: 82, visuospatial: 78 },
+  },
+  {
+    id: 'sess-2',
+    gameId: 'shabda_mala',
+    userId: 'elder-1',
+    timestamp: '2026-08-31T11:00:00Z',
+    durationSeconds: 210,
+    score: 80,
+    accuracy: 85,
+    reactionTimeMs: 1650,
+    difficulty: 'saral',
+    completed: true,
+    xpEarned: 55,
+    mistakesCount: 2,
+    hintsUsed: 1,
+    domainScores: { memory: 85, language: 82, working_memory: 78, executive: 72, attention: 80, visuospatial: 75 },
+  },
+  {
+    id: 'sess-3',
+    gameId: 'rangoli_rekha',
+    userId: 'elder-1',
+    timestamp: '2026-09-01T17:30:00Z',
+    durationSeconds: 190,
+    score: 75,
+    accuracy: 80,
+    reactionTimeMs: 1300,
+    difficulty: 'saral',
+    completed: true,
+    xpEarned: 50,
+    mistakesCount: 2,
+    hintsUsed: 0,
+    domainScores: { memory: 86, language: 80, working_memory: 84, executive: 75, attention: 82, visuospatial: 80 },
+  },
+  {
+    id: 'sess-4',
+    gameId: 'bazaar_hisaab',
+    userId: 'elder-1',
+    timestamp: '2026-09-02T10:10:00Z',
+    durationSeconds: 240,
+    score: 70,
+    accuracy: 75,
+    reactionTimeMs: 2100,
+    difficulty: 'saral',
+    completed: true,
+    xpEarned: 50,
+    mistakesCount: 3,
+    hintsUsed: 1,
+    domainScores: { memory: 85, language: 81, working_memory: 82, executive: 74, attention: 79, visuospatial: 78 },
+  },
+  {
+    id: 'sess-5',
+    gameId: 'dhyan_kendra',
+    userId: 'elder-1',
+    timestamp: '2026-09-03T15:45:00Z',
+    durationSeconds: 150,
+    score: 90,
+    accuracy: 92,
+    reactionTimeMs: 980,
+    difficulty: 'madhyam',
+    completed: true,
+    xpEarned: 75,
+    mistakesCount: 1,
+    hintsUsed: 0,
+    domainScores: { memory: 86, language: 82, working_memory: 83, executive: 76, attention: 89, visuospatial: 82 },
+  },
+  {
+    id: 'sess-6',
+    gameId: 'smriti_sangam',
+    userId: 'elder-1',
+    timestamp: '2026-09-04T08:30:00Z',
+    durationSeconds: 140,
+    score: 95,
+    accuracy: 94,
+    reactionTimeMs: 1100,
+    difficulty: 'madhyam',
+    completed: true,
+    xpEarned: 80,
+    mistakesCount: 1,
+    hintsUsed: 0,
+    domainScores: { memory: 91, language: 83, working_memory: 86, executive: 77, attention: 88, visuospatial: 84 },
+  },
+];
+
+class GameService {
+  private sessions: GameSession[];
+
+  constructor() {
+    const saved = localStorage.getItem(STORAGE_KEY_SESSIONS);
+    if (saved) {
+      try {
+        this.sessions = JSON.parse(saved);
+      } catch {
+        this.sessions = DEFAULT_INITIAL_SESSIONS;
+      }
+    } else {
+      this.sessions = DEFAULT_INITIAL_SESSIONS;
+      localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(this.sessions));
+    }
+
+    // Load Dexie stored sessions to ensure complete offline persistence
+    if (typeof window !== 'undefined') {
+      offlineDb.gameSessions.toArray().then((dexieSessions) => {
+        if (dexieSessions && dexieSessions.length > 0) {
+          const existingIds = new Set(this.sessions.map((s) => s.id));
+          dexieSessions.forEach((ds) => {
+            if (!existingIds.has(ds.id)) {
+              this.sessions.push(ds);
+            }
+          });
+          localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(this.sessions));
+        }
+      }).catch((e) => console.warn('[GameService] Dexie restore notice:', e));
+    }
+  }
+
+  public getAllSessions(): GameSession[] {
+    return [...this.sessions];
+  }
+
+  public getSessionsForUser(userId: string): GameSession[] {
+    return this.sessions
+      .filter((s) => s.userId === userId)
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }
+
+  public recordSession(params: {
+    gameId: GameId;
+    durationSeconds: number;
+    accuracy: number;
+    mistakesCount: number;
+    hintsUsed: number;
+    difficulty: DifficultyTier;
+    reactionTimeMs?: number;
+  }): { session: GameSession; xpEarned: number; leveledUp: boolean } {
+    const user = authService.getCurrentUser();
+    if (!user) throw new Error("Not authenticated");
+
+    // Base XP calculation based on difficulty and accuracy
+    let baseMultiplier = 1.0;
+    if (params.difficulty === 'madhyam') baseMultiplier = 1.3;
+    if (params.difficulty === 'nipun') baseMultiplier = 1.6;
+
+    const rawScore = Math.round(params.accuracy * 0.8 + (100 - Math.min(params.mistakesCount * 10, 50)) * 0.2);
+    const xpEarned = Math.round((40 + Math.floor(params.accuracy * 0.4)) * baseMultiplier);
+
+    // Get current domain scores or defaults
+    const currentDomainScores = this.calculateDomainScores(user.id);
+
+    // Map game to primary cognitive domain
+    const gameDomainMap: Record<GameId, CognitiveDomain> = {
+      smriti_sangam: 'memory',
+      shabda_mala: 'language',
+      rangoli_rekha: 'working_memory',
+      bazaar_hisaab: 'executive',
+      dhyan_kendra: 'attention',
+      disha_sathi: 'visuospatial',
+      sequence_memory: 'working_memory',
+      object_recognition: 'memory',
+      word_recall: 'language',
+      number_pattern: 'executive',
+      daily_challenge: 'memory',
+      family_memory: 'family_reminiscence',
+      ne_states_memory: 'northeast_culture',
+      guess_the_place: 'northeast_culture',
+      culture_match: 'northeast_culture',
+      food_memory: 'northeast_culture',
+      nature_memory: 'northeast_culture',
+      festival_memory: 'northeast_culture',
+    };
+    const primaryDomain = gameDomainMap[params.gameId] || 'memory';
+
+    // Increment primary domain slightly based on accuracy
+    const domainScores = { ...currentDomainScores };
+    const currentVal = domainScores[primaryDomain] || 75;
+    const delta = params.accuracy >= 80 ? 2 : params.accuracy >= 60 ? 1 : -1;
+    domainScores[primaryDomain] = Math.max(40, Math.min(98, currentVal + delta));
+
+    const newSession: GameSession = {
+      id: `sess-${Date.now()}`,
+      gameId: params.gameId,
+      userId: user.id,
+      timestamp: new Date().toISOString(),
+      durationSeconds: params.durationSeconds,
+      score: rawScore,
+      accuracy: params.accuracy,
+      reactionTimeMs: params.reactionTimeMs,
+      difficulty: params.difficulty,
+      completed: true,
+      xpEarned,
+      mistakesCount: params.mistakesCount,
+      hintsUsed: params.hintsUsed,
+      domainScores,
+    };
+
+    this.sessions.push(newSession);
+    localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(this.sessions));
+
+    // Offline-first save: Write to Dexie IndexedDB with 'pending' syncStatus
+    offlineDb.gameSessions.put({
+      ...newSession,
+      syncStatus: 'pending',
+    }).then(() => {
+      // If online, immediately trigger sync to Supabase
+      if (typeof navigator !== 'undefined' && navigator.onLine) {
+        syncService.syncPendingData().catch((err) => {
+          console.warn('[GameService] Sync notice:', err);
+        });
+      }
+    }).catch((dexieErr) => {
+      console.warn('[GameService] Dexie write warning:', dexieErr);
+    });
+
+    // Award XP and check level
+    const { leveledUp } = profileService.addXpToCurrentUser(xpEarned);
+    soundService.playVictoryFanfare();
+
+    // Auto-complete corresponding task in daily plan
+    try {
+      dailyPlanService.onGameCompleted(user.id, params.gameId);
+    } catch (e) {
+      console.warn('[GameService] Daily plan auto-complete error:', e);
+    }
+
+    return { session: newSession, xpEarned, leveledUp };
+  }
+
+  public async syncSessionsFromDb(userId: string): Promise<GameSession[]> {
+    if (userId && userId.includes('-') && userId.length > 20) {
+      try {
+        const { data, error } = await supabase
+          .from('game_sessions')
+          .select('*')
+          .eq('patient_id', userId)
+          .order('completed_at', { ascending: false });
+
+        if (data && !error && data.length > 0) {
+          const mapped: GameSession[] = data.map((d) => ({
+            id: d.id,
+            gameId: d.game_id as GameId,
+            userId: d.patient_id,
+            timestamp: d.completed_at,
+            durationSeconds: d.duration_seconds || 0,
+            score: d.score,
+            accuracy: Number(d.accuracy) || 100,
+            difficulty: (d.metadata?.difficulty || 'saral') as DifficultyTier,
+            completed: true,
+            xpEarned: d.metadata?.xpEarned || 50,
+            mistakesCount: d.metadata?.mistakesCount || 0,
+            hintsUsed: d.metadata?.hintsUsed || 0,
+            domainScores: d.metadata?.domainScores,
+          }));
+
+          this.sessions = [
+            ...this.sessions.filter((s) => s.userId !== userId),
+            ...mapped,
+          ];
+          localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(this.sessions));
+          return mapped;
+        }
+      } catch (err) {
+        console.warn('[GameService] Error syncing game sessions from Supabase:', err);
+      }
+    }
+    return this.getSessionsForUser(userId);
+  }
+
+  public calculateDomainScores(userId: string): Record<CognitiveDomain, number> {
+    const userSessions = this.getSessionsForUser(userId);
+    const baselineScores: Record<CognitiveDomain, number> = {
+      memory: 75,
+      language: 75,
+      working_memory: 75,
+      executive: 75,
+      attention: 75,
+      visuospatial: 75,
+      northeast_culture: 75,
+      family_reminiscence: 75,
+    };
+
+    if (userSessions.length === 0) {
+      return baselineScores;
+    }
+
+    // Average the domain scores across all recorded sessions
+    const domainTotals: Record<string, { sum: number; count: number }> = {};
+    const domains: CognitiveDomain[] = [
+      'memory',
+      'language',
+      'working_memory',
+      'executive',
+      'attention',
+      'visuospatial',
+      'northeast_culture',
+      'family_reminiscence',
+    ];
+
+    domains.forEach((d) => {
+      domainTotals[d] = { sum: 0, count: 0 };
+    });
+
+    userSessions.forEach((s) => {
+      if (s.domainScores) {
+        domains.forEach((d) => {
+          if (s.domainScores![d] !== undefined) {
+            domainTotals[d].sum += s.domainScores![d]!;
+            domainTotals[d].count += 1;
+          }
+        });
+      }
+    });
+
+    const result = { ...baselineScores };
+    domains.forEach((d) => {
+      if (domainTotals[d].count > 0) {
+        result[d] = Math.round(domainTotals[d].sum / domainTotals[d].count);
+      }
+    });
+
+    return result;
+  }
+}
+
+export const gameService = new GameService();

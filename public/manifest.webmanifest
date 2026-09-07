@@ -1,0 +1,29 @@
+{
+  "name": "MIND SATHI - Cognitive Wellness",
+  "short_name": "MIND SATHI",
+  "description": "Adaptive Cognitive Engagement & Elderly-Care Ecosystem - Khelo. Socho. Badho.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FAF7F2",
+  "theme_color": "#0B2239",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/favicon.png",
+      "sizes": "64x64",
+      "type": "image/png"
+    },
+    {
+      "src": "/logo_icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

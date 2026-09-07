@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 200" preserveAspectRatio="none" fill="none">
+  <defs>
+    <linearGradient id="saffronGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF9933" />
+      <stop offset="100%" stop-color="#E87612" />
+    </linearGradient>
+    <linearGradient id="whiteGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" />
+      <stop offset="100%" stop-color="#F2EFE9" />
+    </linearGradient>
+    <linearGradient id="greenGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#138808" />
+      <stop offset="100%" stop-color="#0D5C06" />
+    </linearGradient>
+    <filter id="waveShadow" x="-10%" y="-15%" width="120%" height="130%">
+      <feDropShadow dx="-3" dy="-4" stdDeviation="5" flood-color="#051322" flood-opacity="0.35" />
+    </filter>
+  </defs>
+  
+  <g filter="url(#waveShadow)">
+    <!-- Saffron Stripe -->
+    <path d="M 0 200 C 130 185 235 125 350 78 C 410 52 455 40 500 28 L 500 200 Z" fill="url(#saffronGrad)" />
+    
+    <!-- White Stripe -->
+    <path d="M 45 200 C 165 188 255 142 365 102 C 420 80 460 70 500 60 L 500 200 Z" fill="url(#whiteGrad)" />
+    
+    <!-- Green Stripe -->
+    <path d="M 95 200 C 200 192 280 160 380 130 C 430 112 468 102 500 95 L 500 200 Z" fill="url(#greenGrad)" />
+  </g>
+</svg>

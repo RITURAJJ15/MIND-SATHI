@@ -1,0 +1,96 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-primary: #FAF7F2;
+    --bg-surface: #FFFFFF;
+    --text-primary: #23272F;
+    --text-secondary: #575F6E;
+    --border-subtle: #E8E3DA;
+    --accent-saffron: #AF4D1B;
+    --accent-sage: #496D50;
+  }
+
+  html {
+    font-size: 16px;
+    font-family: 'Outfit', 'Inter', system-ui, sans-serif;
+    scroll-behavior: smooth;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Elder-friendly font scaling */
+  html.font-normal {
+    font-size: 16px;
+  }
+
+  html.font-large {
+    font-size: 18px;
+  }
+
+  html.font-extralarge {
+    font-size: 20px;
+  }
+
+  /* Elder-friendly high contrast mode */
+  html.high-contrast {
+    --bg-primary: #000000;
+    --bg-surface: #121212;
+    --text-primary: #FFFFFF;
+    --text-secondary: #E0E0E0;
+    --border-subtle: #FFD700;
+    --accent-saffron: #FFB300;
+    --accent-sage: #00E676;
+    background-color: #000000 !important;
+    color: #FFFFFF !important;
+  }
+
+  html.high-contrast .bg-white {
+    background-color: #181818 !important;
+    color: #FFFFFF !important;
+    border-color: #FFD700 !important;
+  }
+
+  html.high-contrast .text-gray-900,
+  html.high-contrast .text-gray-800,
+  html.high-contrast .text-gray-700 {
+    color: #FFFFFF !important;
+  }
+
+  html.high-contrast .text-gray-600,
+  html.high-contrast .text-gray-500 {
+    color: #E2E8F0 !important;
+  }
+
+  html.high-contrast button {
+    border-width: 2px !important;
+  }
+
+  body {
+    min-height: 100vh;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+  }
+}
+
+/* Tactile button active states */
+.tactile-btn {
+  transition: all 0.1s ease-in-out;
+}
+.tactile-btn:active {
+  transform: translateY(2px);
+  box-shadow: 0 2px 0 0 rgba(0, 0, 0, 0.15) !important;
+}
+
+/* Custom elder-friendly focus indicators */
+*:focus-visible {
+  outline: 3px solid #D26727 !important;
+  outline-offset: 3px !important;
+}
+
+/* Indic text styling */
+.indic-text {
+  font-family: 'Noto Sans Devanagari', 'Noto Sans Bengali', 'Outfit', sans-serif;
+  line-height: 1.6;
+}

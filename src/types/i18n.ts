@@ -1,0 +1,85 @@
+export interface TranslationStrings {
+  common: {
+    appName: string;
+    tagline: string;
+    greeting: string;
+    play: string;
+    start: string;
+    continue: string;
+    pause: string;
+    restart: string;
+    back: string;
+    next: string;
+    finish: string;
+    save: string;
+    cancel: string;
+    confirm: string;
+    completed: string;
+    xp: string;
+    points: string;
+    level: string;
+    streak: string;
+    day: string;
+    days: string;
+    accuracy: string;
+    time: string;
+    difficulty: string;
+    saral: string;
+    madhyam: string;
+    nipun: string;
+    listen: string;
+    mute: string;
+    sos: string;
+    switchRole: string;
+    elderly: string;
+    caregiver: string;
+    clinician: string;
+  };
+  nav: {
+    home: string;
+    games: string;
+    dailyPlan: string;
+    memories: string;
+    progress: string;
+    leaderboard: string;
+    reminders: string;
+    ayushman: string;
+    caregiverPortal: string;
+    clinicianPortal: string;
+    adminPortal?: string;
+    family?: string;
+    assistant?: string;
+    settings: string;
+  };
+  games: {
+    allGames: string;
+    recommendedForYou: string;
+    playAgain: string;
+    wellDone: string;
+    outstanding: string;
+    keepPracticing: string;
+    memoryTitle: string;
+    wordTitle: string;
+    patternTitle: string;
+    mathTitle: string;
+    focusTitle: string;
+    spatialTitle: string;
+    northeastCultureTitle?: string;
+    familyMemoryTitle?: string;
+  };
+  family?: {
+    title: string;
+    callNow: string;
+    videoCall: string;
+    message: string;
+    favoriteContacts: string;
+    addMember: string;
+  };
+  accessibility: {
+    title: string;
+    textSize: string;
+    highContrast: string;
+    voiceAssistance: string;
+    soundEffects: string;
+  };
+}
