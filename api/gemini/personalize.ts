@@ -1,16 +1,4 @@
-interface ApiRequest {
-  method?: string;
-  body?: any;
-  headers?: Record<string, string>;
-  url?: string;
-}
-
-interface ApiResponse {
-  status: (code: number) => ApiResponse;
-  json: (body: any) => void;
-  setHeader: (name: string, value: string) => void;
-  end: () => void;
-}
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 
 function extractJson(text: string): any {
   const clean = text.replace(/```json/gi, '').replace(/```/g, '').trim();
@@ -58,7 +46,7 @@ async function callGeminiGenerate(apiKey: string, contents: any[], systemInstruc
   throw new Error('All Gemini models failed to respond.');
 }
 
-export default async function handler(req: ApiRequest, res: ApiResponse) {
+export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');

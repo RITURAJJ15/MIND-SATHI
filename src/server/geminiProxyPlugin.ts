@@ -104,7 +104,7 @@ async function handleGeminiApiRoute(req: http.IncomingMessage, res: http.ServerR
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    sendJson(res, 500, { error: 'Gemini API key is not configured on server. Please set GEMINI_API_KEY in environment variables.' });
+    sendJson(res, 500, { error: 'Gemini API key is not configured on server. Please set GEMINI_API_KEY in your environment variables.' });
     return true;
   }
 

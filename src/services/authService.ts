@@ -1001,10 +1001,8 @@ class AuthService {
     localStorage.setItem(SK_PROFILES, JSON.stringify(this.allProfiles));
     offlineDb.profiles.put(newProfile).catch(() => {});
 
-    // Link any family members created before/during signup (for elderly patient accounts)
-    if (newProfile.role === 'elderly' || (newProfile.role as string) === 'patient') {
-      familyService.linkFamilyMembersToPatient(newProfile.id, email);
-    }
+    // Link any family members created before/during signup
+    familyService.linkFamilyMembersToPatient(newProfile.id, email);
 
     const session = makeSession(newProfile, email, payload.mobile);
     this.session = session;
