@@ -749,16 +749,15 @@ class AuthService {
       }
     }
 
-    // Explicitly link and sync family members, reminders, and game sessions with this patient ID
-    familyService.linkFamilyMembersToPatient(profile.id, normalizedEmail);
-    familyService.syncFamilyMembersFromDb(profile.id).catch(() => {});
-    reminderService.syncRemindersFromDb(profile.id).catch(() => {});
-    gameService.syncSessionsFromDb(profile.id).catch(() => {});
-
     if (profile.role === 'elderly' || (profile.role as string) === 'patient') {
       this.patientProfile = profile;
       localStorage.setItem(SK_PATIENT_PROFILE, JSON.stringify(profile));
       this.currentProfile = profile;
+      // Explicitly link and sync family members, reminders, and game sessions with this patient ID
+      familyService.linkFamilyMembersToPatient(profile.id, normalizedEmail);
+      familyService.syncFamilyMembersFromDb(profile.id).catch(() => {});
+      reminderService.syncRemindersFromDb(profile.id).catch(() => {});
+      gameService.syncSessionsFromDb(profile.id).catch(() => {});
     } else if (profile.role === 'caregiver') {
       this.caregiverProfile = profile;
       localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(profile));
@@ -766,7 +765,13 @@ class AuthService {
         this.currentProfile = profile;
       }
       // Immediately resolve and link the strictly connected patient for this caregiver
-      this.resolveConnectedPatientForCaregiver(profile.id, normalizedEmail);
+      this.resolveConnectedPatientForCaregiver(profile.id, normalizedEmail).then((connectedPatient) => {
+        if (connectedPatient) {
+          familyService.syncFamilyMembersFromDb(connectedPatient.id).catch(() => {});
+          reminderService.syncRemindersFromDb(connectedPatient.id).catch(() => {});
+          gameService.syncSessionsFromDb(connectedPatient.id).catch(() => {});
+        }
+      }).catch(() => {});
     } else {
       this.currentProfile = profile;
     }
@@ -996,8 +1001,10 @@ class AuthService {
     localStorage.setItem(SK_PROFILES, JSON.stringify(this.allProfiles));
     offlineDb.profiles.put(newProfile).catch(() => {});
 
-    // Link any family members created before/during signup
-    familyService.linkFamilyMembersToPatient(newProfile.id, email);
+    // Link any family members created before/during signup (for elderly patient accounts)
+    if (newProfile.role === 'elderly' || (newProfile.role as string) === 'patient') {
+      familyService.linkFamilyMembersToPatient(newProfile.id, email);
+    }
 
     const session = makeSession(newProfile, email, payload.mobile);
     this.session = session;
