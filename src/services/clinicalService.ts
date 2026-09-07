@@ -130,15 +130,26 @@ class ClinicalService {
       console.warn('[ClinicalService] Supabase profiles query warning:', err);
     }
 
-    // 6. If no real patients found yet, fallback to default seed patient
-    if (patientsMap.size === 0) {
+    // 6. If real registered patients exist, exclude demo profile Dadi Sathi
+    const result = Array.from(patientsMap.values());
+    const realPatients = result.filter(
+      (p) =>
+        p.email?.toLowerCase() !== 'dadi@mindsathi.in' &&
+        p.id !== 'e1000000-0000-4000-a000-000000000001'
+    );
+    if (realPatients.length > 0) {
+      return realPatients;
+    }
+
+    // If no real patients registered yet, fallback to default demo patient
+    if (result.length === 0) {
       const demoElder = DEFAULT_PROFILES.find((p) => p.role === 'elderly');
       if (demoElder) {
-        patientsMap.set(demoElder.id, demoElder);
+        return [demoElder];
       }
     }
 
-    return Array.from(patientsMap.values());
+    return result;
   }
 
   /**

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { clinicalService, Clinical30DaySummary } from '../services/clinicalService';
+import { gameService } from '../services/gameService';
 import { useCurrentUser } from '../hooks/useCurrentUser';
 import { useLanguage } from '../hooks/useLanguage';
 import { UserProfile } from '../types/user';
@@ -34,6 +35,7 @@ export const ClinicianPortalPage: React.FC = () => {
   const [doctorNotes, setDoctorNotes] = useState<string>('');
   const [notesSaved, setNotesSaved] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
+  const [sessionSyncCount, setSessionSyncCount] = useState<number>(0);
 
   // 1. Fetch genuine authorized patients
   useEffect(() => {
@@ -56,24 +58,36 @@ export const ClinicianPortalPage: React.FC = () => {
     return authorizedPatients.find((p) => p.id === selectedPatientId) || authorizedPatients[0] || null;
   }, [authorizedPatients, selectedPatientId]);
 
-  // 2. Load genuine 30-day summary, MoCA mapping, and doctor notes
+  // Sync genuine gameplay sessions from database whenever selected patient changes
   const patientId = selectedPatient?.id || '';
+  useEffect(() => {
+    if (patientId) {
+      gameService
+        .syncSessionsFromDb(patientId)
+        .then(() => {
+          setSessionSyncCount((c) => c + 1);
+        })
+        .catch(() => {});
+    }
+  }, [patientId]);
+
+  // 2. Load genuine 30-day summary, MoCA mapping, and doctor notes
   const summary: Clinical30DaySummary = useMemo(() => {
     if (!patientId) {
       return clinicalService.get30DayPatientSummary('');
     }
     return clinicalService.get30DayPatientSummary(patientId);
-  }, [patientId]);
+  }, [patientId, sessionSyncCount]);
 
   const mocaAlignment = useMemo(() => {
     if (!patientId) return [];
     return clinicalService.getMocaMmseAlignment(patientId);
-  }, [patientId]);
+  }, [patientId, sessionSyncCount]);
 
   const trendData = useMemo(() => {
     if (!patientId) return [];
     return clinicalService.getClinicalTrendData(patientId);
-  }, [patientId]);
+  }, [patientId, sessionSyncCount]);
 
   // Load doctor notes for this patient
   useEffect(() => {

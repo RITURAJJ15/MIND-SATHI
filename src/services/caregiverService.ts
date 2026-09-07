@@ -381,6 +381,118 @@ class CaregiverService {
   }
 
   /**
+   * Retrieves the assigned caregiver profile for a specific elderly patient.
+   * Checks Supabase caregiver_patient, profiles table, and local caches.
+   */
+  public async getAssignedCaregiverForPatient(patientId: string): Promise<UserProfile | null> {
+    if (!patientId) return null;
+
+    const allProfiles = authService.getAllProfiles();
+    const patient = allProfiles.find((p) => p.id === patientId);
+
+    // 1. Check patient profile's caregiverIds
+    if (patient?.caregiverIds && patient.caregiverIds.length > 0) {
+      const cgId = patient.caregiverIds[0];
+      const cg = allProfiles.find(
+        (p) =>
+          (p.id === cgId || (p.email && p.email.toLowerCase() === cgId.toLowerCase())) &&
+          p.role === 'caregiver'
+      );
+      if (cg && !cg.name.includes('Dr. Admin Caregiver')) {
+        return cg;
+      }
+    }
+
+    // 2. Check Supabase caregiver_patient table
+    try {
+      const { data: linkRows } = await supabase
+        .from('caregiver_patient')
+        .select('caregiver_id')
+        .eq('patient_id', patientId)
+        .limit(1);
+
+      if (linkRows && linkRows.length > 0 && linkRows[0].caregiver_id) {
+        const cgId = linkRows[0].caregiver_id;
+        const cg = allProfiles.find((p) => p.id === cgId);
+        if (cg && !cg.name.includes('Dr. Admin Caregiver')) return cg;
+
+        const { data: cgData } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('id', cgId)
+          .maybeSingle();
+
+        if (cgData && !(cgData.full_name || '').includes('Dr. Admin Caregiver')) {
+          const mapped: UserProfile = {
+            id: cgData.id,
+            name: cgData.full_name || 'Assigned Caregiver',
+            preferredName: cgData.preferred_name || 'Caregiver',
+            role: 'caregiver',
+            email: cgData.email || '',
+            phone: cgData.phone || '',
+            age: cgData.age || 40,
+            gender: cgData.gender || 'other',
+            avatarUrl:
+              cgData.profile_photo_url ||
+              `https://api.dicebear.com/9.x/avataaars/svg?seed=${cgData.id}&backgroundColor=b6e3f4`,
+            primaryLanguage: 'en',
+            city: cgData.city || 'Guwahati',
+            state: cgData.state || 'Assam',
+            isAyushmanMember: false,
+            ayushmanStatus: 'none',
+            pmjayStatus: 'none',
+            abhaStatus: 'none',
+            hasCompletedOnboarding: true,
+            caregiverIds: [patientId],
+            clinicianIds: [],
+            accessibility: {
+              fontSize: 'normal',
+              highContrast: false,
+              textToSpeechAuto: false,
+              soundEffects: true,
+              speechRate: 1.0,
+            },
+            streakDays: 1,
+            totalXp: 50,
+            level: 1,
+            levelTitle: 'Caregiver',
+            createdAt: cgData.created_at || new Date().toISOString(),
+          };
+          return mapped;
+        }
+      }
+    } catch (e) {
+      console.warn('[CaregiverService] getAssignedCaregiverForPatient note:', e);
+    }
+
+    // 3. Check local storage
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(`${STORAGE_KEY_CAREGIVER_PATIENT}_`)) {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.some((pt) => pt.id === patientId)) {
+              const cgId = key.replace(`${STORAGE_KEY_CAREGIVER_PATIENT}_`, '');
+              const foundCg = allProfiles.find(
+                (p) =>
+                  (p.id === cgId || (p.email && p.email.toLowerCase() === cgId.toLowerCase())) &&
+                  p.role === 'caregiver'
+              );
+              if (foundCg && !foundCg.name.includes('Dr. Admin Caregiver')) {
+                return foundCg;
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+
+    return null;
+  }
+
+  /**
    * Fetches registered elderly patients who are available to be linked.
    * Merges real profiles from local storage and Supabase, completely filtering out mock data.
    */

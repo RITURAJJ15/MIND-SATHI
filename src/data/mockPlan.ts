@@ -2,7 +2,7 @@ import { DailyPlan } from '../types/plan';
 
 export const MOCK_DAILY_PLAN: DailyPlan = {
   id: 'plan-today',
-  userId: 'elder-1',
+  userId: 'e1000000-0000-4000-a000-000000000001',
   date: '2026-09-04',
   totalXpPossible: 240,
   earnedXpToday: 0,

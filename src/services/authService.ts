@@ -47,6 +47,46 @@ export function getAvatarFromCache(userId: string, email?: string): string | nul
   return null;
 }
 
+/**
+ * Generates a stable, deterministic UUID for a given email address.
+ * Ensures the exact same user ID is produced across different browsers, devices,
+ * and sessions without relying on volatile random UUID generation.
+ */
+export function getDeterministicUserId(email: string): string {
+  const clean = (email || '').trim().toLowerCase();
+  if (!clean) return 'e1000000-0000-4000-a000-000000000001';
+  if (clean === 'dadi@mindsathi.in') return 'e1000000-0000-4000-a000-000000000001';
+  if (clean === 'admin@mindsathi.in') return 'c1000000-0000-4000-a000-000000000002';
+  if (clean === 'rituraj11@mindsathi.in') return 'a1000000-0000-4000-a000-000000000003';
+
+  let h1 = 0x811c9dc5;
+  let h2 = 0x55555555;
+  let h3 = 0x33333333;
+  let h4 = 0x0f0f0f0f;
+
+  for (let i = 0; i < clean.length; i++) {
+    const code = clean.charCodeAt(i);
+    h1 = Math.imul(h1 ^ code, 0x01000193);
+    h2 = Math.imul(h2 ^ (code << 1), 0x01000193);
+    h3 = Math.imul(h3 ^ (code << 2), 0x01000193);
+    h4 = Math.imul(h4 ^ (code << 3), 0x01000193);
+  }
+
+  const toHex = (n: number) => (n >>> 0).toString(16).padStart(8, '0');
+  const part1 = toHex(h1);
+  const part2 = toHex(h2);
+  const part3 = toHex(h3);
+  const part4 = toHex(h4);
+
+  const timeLow = part1;
+  const timeMid = part2.substring(0, 4);
+  const timeHi = '4' + part2.substring(5, 8);
+  const clockSeq = 'a' + part3.substring(1, 4);
+  const node = part3.substring(4, 8) + part4.substring(0, 8);
+
+  return `${timeLow}-${timeMid}-${timeHi}-${clockSeq}-${node}`;
+}
+
 export interface StoredCredential {
   email: string;
   username?: string;
@@ -619,7 +659,7 @@ class AuthService {
           const foundProfile = this.allProfiles.find(
             (p) => p.email && p.email.toLowerCase() === normalizedEmail
           );
-          userId = localCred?.userId || foundProfile?.id || crypto.randomUUID();
+          userId = localCred?.userId || foundProfile?.id || getDeterministicUserId(normalizedEmail);
           authRole = foundProfile?.role || localCred?.role || 'elderly';
           saveStoredCredential({
             email: normalizedEmail,
@@ -827,7 +867,7 @@ class AuthService {
           saveStoredCredential({
             email,
             password: payload.password,
-            userId: existingCred?.userId || crypto.randomUUID(),
+            userId: existingCred?.userId || getDeterministicUserId(email),
             role: payload.role,
             mobile: payload.mobile,
             createdAt: new Date().toISOString(),
@@ -854,10 +894,10 @@ class AuthService {
               userId = loginRes.data.user.id;
               registeredWithSupabase = true;
             } else {
-              userId = crypto.randomUUID();
+              userId = getDeterministicUserId(email);
             }
           } catch {
-            userId = crypto.randomUUID();
+            userId = getDeterministicUserId(email);
           }
         } else {
           return { success: false, error: { message: sbError.message } };
@@ -868,7 +908,7 @@ class AuthService {
           saveStoredCredential({
             email,
             password: payload.password,
-            userId: sbData.user.id || crypto.randomUUID(),
+            userId: sbData.user.id || getDeterministicUserId(email),
             role: payload.role,
             mobile: payload.mobile,
             createdAt: new Date().toISOString(),
@@ -885,11 +925,11 @@ class AuthService {
       }
     } catch (err: unknown) {
       console.warn('[AuthService] Supabase signUp network error:', err);
-      userId = crypto.randomUUID();
+      userId = getDeterministicUserId(email);
     }
 
     if (!userId) {
-      userId = crypto.randomUUID();
+      userId = getDeterministicUserId(email);
     }
 
     // 3. Always save credential so user can log out and log back in with the same email & password
@@ -1159,24 +1199,31 @@ class AuthService {
         }
       }
     } catch {}
-    const inAll = this.allProfiles.find((p) => p.role === 'caregiver' && isRealProfile(p));
-    if (inAll) {
-      this.caregiverProfile = inAll;
-      return inAll;
+    // If the authenticated user is actually a caregiver, return that profile
+    if (this.currentProfile?.role === 'caregiver' && isRealProfile(this.currentProfile)) {
+      return this.currentProfile;
     }
-    return this.currentProfile?.role === 'caregiver' ? this.currentProfile : null;
+    return null;
   }
 
   /**
    * Retrieves the current user profile.
-   * If contextTab is 'caregiver', returns the caregiver profile.
-   * For Home Page and all other screens, returns the Patient profile!
+   * If contextTab is 'caregiver':
+   * - If a caregiver profile is authenticated, returns the caregiver profile.
+   * - If an elderly patient is authenticated and navigates to the caregiver tab,
+   *   returns the elderly patient so the portal can show patient-caregiver connection status.
+   * - Never returns a fake fallback caregiver!
+   * For Home Page and all other screens, returns the Patient profile.
    */
   public getCurrentUser(contextTab?: string): UserProfile | null {
     if (contextTab === 'caregiver') {
       const cg = this.getCaregiverProfile();
       if (cg) return cg;
       if (this.currentProfile?.role === 'caregiver') return this.currentProfile;
+      if (this.currentProfile && (this.currentProfile.role === 'elderly' || (this.currentProfile.role as string) === 'patient')) {
+        return this.currentProfile;
+      }
+      return null;
     } else {
       // Home page, games, daily-plan, progress, etc.
       const pt = this.getPatientProfile();

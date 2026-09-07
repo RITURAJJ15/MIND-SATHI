@@ -14,7 +14,7 @@ const DEFAULT_INITIAL_SESSIONS: GameSession[] = [
   {
     id: 'sess-1',
     gameId: 'smriti_sangam',
-    userId: 'elder-1',
+    userId: 'e1000000-0000-4000-a000-000000000001',
     timestamp: '2026-08-30T09:15:00Z',
     durationSeconds: 160,
     score: 85,
@@ -30,7 +30,7 @@ const DEFAULT_INITIAL_SESSIONS: GameSession[] = [
   {
     id: 'sess-2',
     gameId: 'shabda_mala',
-    userId: 'elder-1',
+    userId: 'e1000000-0000-4000-a000-000000000001',
     timestamp: '2026-08-31T11:00:00Z',
     durationSeconds: 210,
     score: 80,
@@ -46,7 +46,7 @@ const DEFAULT_INITIAL_SESSIONS: GameSession[] = [
   {
     id: 'sess-3',
     gameId: 'rangoli_rekha',
-    userId: 'elder-1',
+    userId: 'e1000000-0000-4000-a000-000000000001',
     timestamp: '2026-09-01T17:30:00Z',
     durationSeconds: 190,
     score: 75,
@@ -62,7 +62,7 @@ const DEFAULT_INITIAL_SESSIONS: GameSession[] = [
   {
     id: 'sess-4',
     gameId: 'bazaar_hisaab',
-    userId: 'elder-1',
+    userId: 'e1000000-0000-4000-a000-000000000001',
     timestamp: '2026-09-02T10:10:00Z',
     durationSeconds: 240,
     score: 70,
@@ -78,7 +78,7 @@ const DEFAULT_INITIAL_SESSIONS: GameSession[] = [
   {
     id: 'sess-5',
     gameId: 'dhyan_kendra',
-    userId: 'elder-1',
+    userId: 'e1000000-0000-4000-a000-000000000001',
     timestamp: '2026-09-03T15:45:00Z',
     durationSeconds: 150,
     score: 90,
@@ -94,7 +94,7 @@ const DEFAULT_INITIAL_SESSIONS: GameSession[] = [
   {
     id: 'sess-6',
     gameId: 'smriti_sangam',
-    userId: 'elder-1',
+    userId: 'e1000000-0000-4000-a000-000000000001',
     timestamp: '2026-09-04T08:30:00Z',
     durationSeconds: 140,
     score: 95,

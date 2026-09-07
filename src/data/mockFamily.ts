@@ -3,7 +3,7 @@ import { FamilyMember, MemoryVaultItem } from '../types/family';
 export const MOCK_FAMILY_MEMBERS: FamilyMember[] = [
   {
     id: 'fam-1',
-    userId: 'elder-1',
+    userId: 'e1000000-0000-4000-a000-000000000001',
     name: 'Priya Sharma',
     relationship: {
       en: 'Daughter (Beti)',
@@ -19,7 +19,7 @@ export const MOCK_FAMILY_MEMBERS: FamilyMember[] = [
   },
   {
     id: 'fam-2',
-    userId: 'elder-1',
+    userId: 'e1000000-0000-4000-a000-000000000001',
     name: 'Rohit Sharma',
     relationship: {
       en: 'Son (Beta)',
@@ -35,7 +35,7 @@ export const MOCK_FAMILY_MEMBERS: FamilyMember[] = [
   },
   {
     id: 'fam-3',
-    userId: 'elder-1',
+    userId: 'e1000000-0000-4000-a000-000000000001',
     name: 'Aarav Sharma',
     relationship: {
       en: 'Grandson (Pota)',
@@ -51,7 +51,7 @@ export const MOCK_FAMILY_MEMBERS: FamilyMember[] = [
   },
   {
     id: 'fam-4',
-    userId: 'elder-1',
+    userId: 'e1000000-0000-4000-a000-000000000001',
     name: 'Ananya Sharma',
     relationship: {
       en: 'Granddaughter (Poti)',
@@ -70,7 +70,7 @@ export const MOCK_FAMILY_MEMBERS: FamilyMember[] = [
 export const MOCK_MEMORIES: MemoryVaultItem[] = [
   {
     id: 'mem-1',
-    userId: 'elder-1',
+    userId: 'e1000000-0000-4000-a000-000000000001',
     title: 'Ganga Ghat Morning Aarti',
     dateOrEra: 'Varanasi, 1988',
     location: 'Assi Ghat, Varanasi',
@@ -90,7 +90,7 @@ export const MOCK_MEMORIES: MemoryVaultItem[] = [
   },
   {
     id: 'mem-2',
-    userId: 'elder-1',
+    userId: 'e1000000-0000-4000-a000-000000000001',
     title: 'Diwali Lanterns & Homemade Gujiya',
     dateOrEra: 'Diwali, 1994',
     location: 'Family Courtyard',
@@ -110,7 +110,7 @@ export const MOCK_MEMORIES: MemoryVaultItem[] = [
   },
   {
     id: 'mem-3',
-    userId: 'elder-1',
+    userId: 'e1000000-0000-4000-a000-000000000001',
     title: 'Rohit’s University Convocation',
     dateOrEra: 'Delhi, 2004',
     location: 'IIT Delhi Campus',
@@ -130,7 +130,7 @@ export const MOCK_MEMORIES: MemoryVaultItem[] = [
   },
   {
     id: 'mem-4',
-    userId: 'elder-1',
+    userId: 'e1000000-0000-4000-a000-000000000001',
     title: 'Trip to Kaziranga National Park',
     dateOrEra: 'Assam, 1999',
     location: 'Kaziranga, Assam',

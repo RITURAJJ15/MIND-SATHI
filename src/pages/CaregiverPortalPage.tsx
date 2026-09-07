@@ -33,7 +33,9 @@ import {
   Users,
   CalendarCheck,
   Loader2,
-  AlertCircle
+  AlertCircle,
+  Copy,
+  Check
 } from 'lucide-react';
 
 export const CaregiverPortalPage: React.FC = () => {
@@ -42,6 +44,12 @@ export const CaregiverPortalPage: React.FC = () => {
 
   // Authentication gate state
   const isCaregiver = currentUser && currentUser.role === 'caregiver';
+  const isElderlyPatient = Boolean(
+    currentUser && (currentUser.role === 'elderly' || (currentUser.role as string) === 'patient')
+  );
+  const [assignedCaregiver, setAssignedCaregiver] = useState<any | null>(null);
+  const [copiedId, setCopiedId] = useState(false);
+  const [loadingCaregiverInfo, setLoadingCaregiverInfo] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
@@ -98,6 +106,29 @@ export const CaregiverPortalPage: React.FC = () => {
       setIsLoadingPatients(false);
     }
   }, [isCaregiver, currentUser?.id]);
+
+  useEffect(() => {
+    if (isElderlyPatient && currentUser?.id) {
+      setLoadingCaregiverInfo(true);
+      caregiverService
+        .getAssignedCaregiverForPatient(currentUser.id)
+        .then((cg) => {
+          setAssignedCaregiver(cg);
+        })
+        .catch(() => {})
+        .finally(() => {
+          setLoadingCaregiverInfo(false);
+        });
+    }
+  }, [isElderlyPatient, currentUser?.id]);
+
+  const handleCopyPatientId = () => {
+    if (currentUser?.id) {
+      navigator.clipboard.writeText(currentUser.id);
+      setCopiedId(true);
+      setTimeout(() => setCopiedId(false), 2500);
+    }
+  };
 
   const fetchAiInsight = async (caregiverId: string, patientId: string) => {
     if (!caregiverId || !patientId) return;
@@ -209,7 +240,96 @@ export const CaregiverPortalPage: React.FC = () => {
   // ──────────────────────────────────────────────────────────────────────────
   if (!isCaregiver) {
     return (
-      <div className="max-w-xl mx-auto py-8 px-4 animate-fade-in">
+      <div className="max-w-2xl mx-auto py-8 px-4 animate-fade-in space-y-6">
+        {/* Patient Status & Linking Information if logged in as elderly patient */}
+        {isElderlyPatient && (
+          <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-elder border border-emerald-200 text-left">
+            {loadingCaregiverInfo ? (
+              <div className="flex items-center justify-center py-6 gap-3 text-gray-500">
+                <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
+                <span className="text-sm font-semibold">Checking caregiver status...</span>
+              </div>
+            ) : assignedCaregiver ? (
+              <div>
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-12 h-12 bg-emerald-100 text-emerald-800 rounded-2xl flex items-center justify-center border border-emerald-300">
+                    <ShieldCheck className="w-6 h-6 text-emerald-700" />
+                  </div>
+                  <div>
+                    <span className="text-xs font-black uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                      Active Linked Caregiver
+                    </span>
+                    <h3 className="text-xl font-black text-gray-900 mt-1">
+                      {assignedCaregiver.name || assignedCaregiver.preferredName}
+                    </h3>
+                  </div>
+                </div>
+                <div className="bg-emerald-50/70 rounded-2xl p-4 border border-emerald-100 space-y-2 text-sm">
+                  {assignedCaregiver.phone && (
+                    <div className="flex items-center gap-2 text-gray-700">
+                      <Phone className="w-4 h-4 text-emerald-700" />
+                      <span className="font-semibold">{assignedCaregiver.phone}</span>
+                    </div>
+                  )}
+                  {assignedCaregiver.email && (
+                    <div className="flex items-center gap-2 text-gray-700">
+                      <Mail className="w-4 h-4 text-emerald-700" />
+                      <span className="font-semibold">{assignedCaregiver.email}</span>
+                    </div>
+                  )}
+                  <p className="text-xs text-gray-500 pt-2 border-t border-emerald-200/60">
+                    Your caregiver has secure real-time access to your daily cognitive scores, medication reminders, and safety updates.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="w-12 h-12 bg-amber-100 text-amber-800 rounded-2xl flex items-center justify-center border border-amber-300">
+                    <AlertTriangle className="w-6 h-6 text-amber-700" />
+                  </div>
+                  <div>
+                    <span className="text-xs font-black uppercase tracking-wider text-amber-800 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200">
+                      No Caregiver Assigned Yet
+                    </span>
+                    <h3 className="text-xl font-black text-gray-900 mt-1">
+                      Link Your Family Caregiver
+                    </h3>
+                  </div>
+                </div>
+
+                <p className="text-sm text-gray-600 mb-4 leading-relaxed">
+                  You are signed in as <strong>{currentUser?.name || currentUser?.preferredName || 'Patient'}</strong>. To allow your son, daughter, or designated caregiver to view your daily health summary and memory vault, share your unique Patient ID below:
+                </p>
+
+                <div className="bg-amber-50 rounded-2xl p-4 border border-amber-200 mb-4">
+                  <div className="text-xs font-bold text-amber-900 mb-1">YOUR UNIQUE PATIENT ID</div>
+                  <div className="flex items-center justify-between gap-2 bg-white rounded-xl px-4 py-2.5 border border-amber-300 font-mono text-xs sm:text-sm font-bold text-gray-900">
+                    <span className="truncate select-all">{currentUser?.id}</span>
+                    <button
+                      type="button"
+                      onClick={handleCopyPatientId}
+                      className="shrink-0 flex items-center gap-1 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg cursor-pointer transition-all"
+                    >
+                      {copiedId ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedId ? 'Copied!' : 'Copy ID'}</span>
+                    </button>
+                  </div>
+                  {currentUser?.email && (
+                    <div className="mt-2 text-xs text-gray-600">
+                      Registered Email: <span className="font-semibold text-gray-900">{currentUser.email}</span>
+                    </div>
+                  )}
+                </div>
+
+                <p className="text-xs text-gray-500">
+                  Your caregiver can enter this Patient ID or your registered email when they create their account or sign in below.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="bg-white p-8 rounded-3xl shadow-elder border border-emerald-200 text-center">
           <div className="w-16 h-16 bg-emerald-100 text-emerald-800 rounded-3xl flex items-center justify-center mx-auto mb-4 border border-emerald-300 shadow-sm">
             <UserCheck className="w-8 h-8" />
@@ -219,7 +339,9 @@ export const CaregiverPortalPage: React.FC = () => {
             {currentLang === 'hi' ? 'देखभालकर्ता पोर्टल (Caregiver Portal)' : 'Caregiver Oversight & Safety Hub'}
           </h2>
           <p className="text-sm text-gray-600 mt-2 mb-6 leading-relaxed">
-            To safeguard senior cognitive health records and view real telemetry, please sign in with your verified Caregiver credentials or create a new Caregiver account.
+            {isElderlyPatient
+              ? 'Are you this patient’s family caregiver? Sign in with your caregiver account or register a new one below to connect.'
+              : 'To safeguard senior cognitive health records and view real telemetry, please sign in with your verified Caregiver credentials or create a new Caregiver account.'}
           </p>
 
           {/* Auth Mode Toggle */}

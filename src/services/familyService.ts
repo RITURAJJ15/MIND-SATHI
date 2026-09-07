@@ -36,9 +36,8 @@ class FamilyService {
     if (savedFams) {
       try {
         const parsed = JSON.parse(savedFams) as FamilyMember[];
-        // Filter out static mock demo members that belong to 'elder-1', but KEEP all user-created members!
         parsed.forEach((m) => {
-          if (m && m.userId !== 'elder-1' && !MOCK_MEMBER_IDS.has(m.id)) {
+          if (m && m.userId !== 'elder-1') {
             loadedMembers.push(m);
           }
         });
@@ -46,6 +45,13 @@ class FamilyService {
         // ignore parse error
       }
     }
+
+    // Ensure default Dadi Sathi family members (Priya, Rohit, Aarav, Ananya) are seeded if not present
+    MOCK_FAMILY_MEMBERS.forEach((mockM) => {
+      if (!loadedMembers.some((m) => m.id === mockM.id)) {
+        loadedMembers.push({ ...mockM });
+      }
+    });
 
     // Also scan dedicated per-patient keys in localStorage so no patient's family is ever lost
     try {
@@ -76,6 +82,7 @@ class FamilyService {
     }
 
     this.members = loadedMembers;
+    localStorage.setItem(STORAGE_KEY_FAMILY, JSON.stringify(this.members));
 
     const savedCalls = localStorage.getItem(STORAGE_KEY_CALLS);
     this.calls = savedCalls ? JSON.parse(savedCalls) : [];
@@ -118,9 +125,13 @@ class FamilyService {
 
     let modified = false;
 
-    // 1. Check in-memory members with temporary userIds
+    // 1. Check in-memory members with temporary userIds or matching email
     this.members.forEach((m) => {
-      if (m.userId === 'current' || m.userId === 'patient-onboarding' || (email && m.userId === email.toLowerCase())) {
+      if (
+        m.userId === 'current' ||
+        m.userId === 'patient-onboarding' ||
+        (email && m.userId.toLowerCase() === email.toLowerCase())
+      ) {
         m.userId = patientId;
         modified = true;
       }
@@ -148,9 +159,22 @@ class FamilyService {
       }
     });
 
-    if (modified) {
-      const patientMembers = this.members.filter((m) => m.userId === patientId);
+    // 3. For Dadi Sathi, ensure MOCK_FAMILY_MEMBERS are attached
+    if (patientId === 'e1000000-0000-4000-a000-000000000001' || email?.toLowerCase() === 'dadi@mindsathi.in') {
+      MOCK_FAMILY_MEMBERS.forEach((mockM) => {
+        if (!this.members.some((m) => m.id === mockM.id && m.userId === 'e1000000-0000-4000-a000-000000000001')) {
+          this.members.push({ ...mockM, userId: 'e1000000-0000-4000-a000-000000000001' });
+          modified = true;
+        }
+      });
+    }
+
+    const patientMembers = this.members.filter((m) => m.userId === patientId);
+    if (patientMembers.length > 0) {
       localStorage.setItem(`${STORAGE_KEY_FAMILY_PREFIX}${patientId}`, JSON.stringify(patientMembers));
+      if (email) {
+        localStorage.setItem(`${STORAGE_KEY_FAMILY_PREFIX}${email.toLowerCase()}`, JSON.stringify(patientMembers));
+      }
       localStorage.setItem(STORAGE_KEY_FAMILY, JSON.stringify(this.members));
 
       // Persist to Dexie
@@ -335,6 +359,49 @@ class FamilyService {
           }
         }
       }
+    }
+
+    // Check if profile exists and has email to check email-based storage key
+    if (userMembers.length === 0) {
+      try {
+        const profilesRaw = localStorage.getItem('mind_sathi_profiles');
+        if (profilesRaw) {
+          const profiles = JSON.parse(profilesRaw) as any[];
+          const myProfile = profiles.find((p) => p.id === userId);
+          if (myProfile?.email) {
+            const rawByEmail = localStorage.getItem(`${STORAGE_KEY_FAMILY_PREFIX}${myProfile.email.toLowerCase()}`);
+            if (rawByEmail) {
+              const parsed = JSON.parse(rawByEmail) as FamilyMember[];
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                userMembers = parsed.map((m) => ({ ...m, userId }));
+                this.members = [
+                  ...this.members.filter((m) => m.userId !== userId),
+                  ...userMembers,
+                ];
+                localStorage.setItem(`${STORAGE_KEY_FAMILY_PREFIX}${userId}`, JSON.stringify(userMembers));
+                localStorage.setItem(STORAGE_KEY_FAMILY, JSON.stringify(this.members));
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+
+    // Fallback: If this is Dadi Sathi (demo patient) and still empty, populate MOCK_FAMILY_MEMBERS
+    if (
+      userMembers.length === 0 &&
+      (userId === 'e1000000-0000-4000-a000-000000000001' || userId.includes('e1000000') || userId === 'dadi@mindsathi.in')
+    ) {
+      userMembers = MOCK_FAMILY_MEMBERS.map((m) => ({ ...m, userId: 'e1000000-0000-4000-a000-000000000001' }));
+      this.members = [
+        ...this.members.filter((m) => m.userId !== 'e1000000-0000-4000-a000-000000000001'),
+        ...userMembers,
+      ];
+      localStorage.setItem(
+        `${STORAGE_KEY_FAMILY_PREFIX}e1000000-0000-4000-a000-000000000001`,
+        JSON.stringify(userMembers)
+      );
+      localStorage.setItem(STORAGE_KEY_FAMILY, JSON.stringify(this.members));
     }
 
     return userMembers;
