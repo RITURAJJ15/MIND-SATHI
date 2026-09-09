@@ -13,6 +13,7 @@ import { NORTHEAST_GAMES } from '../data/mockNortheastGames';
 import { familyService } from '../services/familyService';
 import { storageService } from '../services/storageService';
 import { authService } from '../services/authService';
+import { caregiverService } from '../services/caregiverService';
 import { FamilyMember } from '../types/family';
 import {
   Sparkles,
@@ -33,7 +34,8 @@ import {
   X,
   Plus,
   Sun,
-  Shield
+  Shield,
+  UserCheck,
 } from 'lucide-react';
 import { AshokaChakraIcon } from '../components/layout/AshokaChakraIcon';
 
@@ -55,7 +57,13 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
   const [abhaSuccess, setAbhaSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Sync family members from Supabase & local cache on mount
+  // Caregiver link status state
+  const [assignedCaregiver, setAssignedCaregiver] = useState<any | null>(null);
+  const [loadingCaregiver, setLoadingCaregiver] = useState<boolean>(true);
+  const [unlinkLoading, setUnlinkLoading] = useState<boolean>(false);
+  const [showCaregiverModal, setShowCaregiverModal] = useState<boolean>(false);
+
+  // Sync family members & assigned caregiver from database on mount
   useEffect(() => {
     if (!currentUser?.id) return;
     familyService.syncFamilyMembersFromDb(currentUser.id).then((members) => {
@@ -65,7 +73,36 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
         setFamilyMembers(familyService.getFamilyMembersForUser(currentUser.id));
       }
     });
+
+    setLoadingCaregiver(true);
+    caregiverService
+      .getAssignedCaregiverForPatient(currentUser.id)
+      .then((cg) => setAssignedCaregiver(cg))
+      .catch((e) => console.warn('Error checking assigned caregiver:', e))
+      .finally(() => setLoadingCaregiver(false));
   }, [currentUser?.id]);
+
+  // Handle Unlinking Caregiver (instantly cuts off caregiver access)
+  const handleUnlinkCaregiver = async () => {
+    if (!currentUser?.id) return;
+    const confirmMsg =
+      currentLang === 'hi'
+        ? 'क्या आप अपने देखभालकर्ता (Caregiver) को अनलिंक करना चाहते हैं? अनलिंक करने के बाद वे आपकी गतिविधियों और प्रगति को नहीं देख पाएंगे।'
+        : 'Are you sure you want to unlink your caregiver? Once unlinked, they will be disconnected and will NOT be able to monitor or access any of your records.';
+
+    if (window.confirm(confirmMsg)) {
+      setUnlinkLoading(true);
+      try {
+        const ok = await caregiverService.unlinkCaregiverFromPatient(currentUser.id);
+        if (ok) {
+          setAssignedCaregiver(null);
+          setShowCaregiverModal(false);
+        }
+      } finally {
+        setUnlinkLoading(false);
+      }
+    }
+  };
 
   const memories = familyService.getMemoriesForUser(currentUser.id);
   const featuredMemory = memories[0];
@@ -239,6 +276,36 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
                   <span>ABHA: (Link)</span>
                 </button>
               )}
+
+              {/* Caregiver Link Status Button */}
+              {loadingCaregiver ? (
+                <div className="text-[10px] xs:text-xs text-slate-300 font-medium mt-1 flex items-center gap-1 bg-[#081B2E]/80 px-2 py-0.5 rounded-full border border-slate-700 w-fit">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span>Caregiver: Checking...</span>
+                </div>
+              ) : assignedCaregiver ? (
+                <button
+                  type="button"
+                  onClick={() => setShowCaregiverModal(true)}
+                  className="text-[10px] xs:text-xs text-emerald-200 bg-emerald-950/70 hover:bg-emerald-900 border border-emerald-400/50 rounded-full px-2.5 py-0.5 font-bold mt-1 flex items-center gap-1.5 transition-all cursor-pointer shadow-xs w-fit"
+                  title="Caregiver linked. Click to view or unlink."
+                >
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+                  <span className="truncate max-w-[120px] xs:max-w-[150px]">
+                    Caregiver: Linked
+                  </span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowCaregiverModal(true)}
+                  className="text-[10px] xs:text-xs text-amber-200 bg-amber-950/60 hover:bg-amber-900 border border-amber-400/40 rounded-full px-2.5 py-0.5 font-bold mt-1 flex items-center gap-1.5 transition-all cursor-pointer shadow-xs w-fit"
+                  title="No caregiver linked. Click for instructions."
+                >
+                  <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
+                  <span>Caregiver: Not Linked</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -254,6 +321,82 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
             <span className="hidden xs:inline">Logout</span>
           </button>
         </div>
+      </div>
+
+      {/* Caregiver Oversight Status Banner with Direct Unlink Option */}
+      <div className="animate-fade-in">
+        {assignedCaregiver ? (
+          <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 border-2 border-emerald-300 p-4 sm:p-5 rounded-3xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="relative shrink-0">
+                <img
+                  src={
+                    assignedCaregiver.avatarUrl ||
+                    `https://api.dicebear.com/9.x/avataaars/svg?seed=${assignedCaregiver.id}&backgroundColor=b6e3f4`
+                  }
+                  alt={assignedCaregiver.name}
+                  className="w-12 h-12 rounded-2xl object-cover border-2 border-emerald-500 shadow-sm bg-white"
+                />
+                <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 bg-emerald-500 border-2 border-white rounded-full animate-pulse" />
+              </div>
+
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-900 border border-emerald-300">
+                    🟢 Linked with Caregiver
+                  </span>
+                </div>
+                <div className="text-base font-extrabold text-gray-900 mt-0.5">
+                  {assignedCaregiver.name}
+                </div>
+                <div className="text-xs text-gray-500 font-medium">
+                  {assignedCaregiver.email || assignedCaregiver.phone || 'Authorized Family Caregiver'}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 self-start sm:self-auto">
+              <button
+                type="button"
+                onClick={handleUnlinkCaregiver}
+                disabled={unlinkLoading}
+                className="px-4 py-2.5 rounded-2xl bg-white hover:bg-rose-50 text-rose-700 hover:text-rose-800 border-2 border-rose-200 hover:border-rose-300 text-xs font-extrabold shadow-sm transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {unlinkLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-600" /> : <X className="w-3.5 h-3.5 text-rose-600" />}
+                <span>Unlink Caregiver</span>
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-gradient-to-r from-amber-50 via-orange-50 to-amber-50 border-2 border-amber-200 p-4 sm:p-5 rounded-3xl shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-amber-100 border-2 border-amber-300 flex items-center justify-center text-amber-700 shrink-0 shadow-xs">
+                <UserCheck className="w-6 h-6" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 border border-amber-300">
+                    ⚪ Caregiver: Not Linked
+                  </span>
+                </div>
+                <div className="text-sm font-extrabold text-gray-900 mt-0.5">
+                  No Family Caregiver Connected
+                </div>
+                <p className="text-xs text-amber-950 font-medium max-w-xl">
+                  Your caregiver can sign in from the Landing Page and connect using your email ({currentUser.email}) and password.
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowCaregiverModal(true)}
+              className="px-4 py-2.5 rounded-2xl bg-white hover:bg-amber-100/70 text-amber-900 border-2 border-amber-300 text-xs font-extrabold shadow-xs transition-all cursor-pointer flex items-center gap-1.5 self-start sm:self-auto"
+            >
+              <span>How to Connect</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Top Grid: Personalized Recommendation & Streak/XP */}
@@ -696,6 +839,112 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
                   </button>
                 </div>
               </form>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Caregiver Status & Unlink Modal */}
+      {showCaregiverModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-gray-200 animate-scale-up text-left">
+            <div className="flex items-center justify-between pb-3 border-b border-gray-100 mb-4">
+              <div className="flex items-center gap-2">
+                <UserCheck className="w-5 h-5 text-emerald-600" />
+                <h3 className="font-extrabold text-lg text-gray-900">
+                  Caregiver Connection Status
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCaregiverModal(false)}
+                className="text-gray-400 hover:text-gray-700 p-1.5 rounded-lg text-sm font-bold cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {assignedCaregiver ? (
+              <div className="space-y-4">
+                <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 flex items-center gap-3">
+                  <img
+                    src={
+                      assignedCaregiver.avatarUrl ||
+                      `https://api.dicebear.com/9.x/avataaars/svg?seed=${assignedCaregiver.id}&backgroundColor=b6e3f4`
+                    }
+                    alt={assignedCaregiver.name}
+                    className="w-14 h-14 rounded-2xl object-cover border-2 border-emerald-400 bg-white shadow-xs"
+                  />
+                  <div>
+                    <span className="text-[10px] font-black uppercase text-emerald-800 bg-emerald-100 border border-emerald-300 px-2 py-0.5 rounded-full">
+                      🟢 Connected
+                    </span>
+                    <h4 className="font-extrabold text-base text-gray-900 mt-1">
+                      {assignedCaregiver.name}
+                    </h4>
+                    <p className="text-xs text-gray-600">
+                      {assignedCaregiver.email || assignedCaregiver.phone || 'Designated Family Caregiver'}
+                    </p>
+                  </div>
+                </div>
+
+                <p className="text-xs text-gray-600 leading-relaxed">
+                  This caregiver is authorized to view your daily activity routines, cognitive game completion accuracy, and safety alerts.
+                </p>
+
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={handleUnlinkCaregiver}
+                    disabled={unlinkLoading}
+                    className="w-full py-3 rounded-2xl bg-rose-50 hover:bg-rose-100 border-2 border-rose-300 text-rose-700 font-extrabold text-sm transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {unlinkLoading ? <Loader2 className="w-4 h-4 animate-spin text-rose-600" /> : <X className="w-4 h-4 text-rose-600" />}
+                    <span>Unlink Caregiver Now</span>
+                  </button>
+                  <p className="text-[11px] text-gray-400 text-center mt-2">
+                    Unlinking will instantly revoke the caregiver's access to all your records.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-center">
+                  <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center mx-auto mb-2 font-bold">
+                    <UserCheck className="w-6 h-6" />
+                  </div>
+                  <h4 className="font-black text-gray-900 text-base">
+                    No Caregiver Linked
+                  </h4>
+                  <p className="text-xs text-amber-900 mt-1">
+                    No family caregiver is currently authorized to monitor your profile.
+                  </p>
+                </div>
+
+                <div className="bg-gray-50 p-4 rounded-2xl border border-gray-200 space-y-2 text-xs text-gray-700">
+                  <div className="font-bold text-gray-900">How your caregiver can connect:</div>
+                  <div className="flex items-start gap-2">
+                    <span className="font-bold text-emerald-700">1.</span>
+                    <span>Caregiver visits the <strong>Landing Page</strong> and clicks <strong>Caregiver Portal</strong>.</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="font-bold text-emerald-700">2.</span>
+                    <span>They register or sign in with their Caregiver account.</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <span className="font-bold text-emerald-700">3.</span>
+                    <span>They enter your registered email (<strong>{currentUser.email}</strong>) and password to connect securely.</span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowCaregiverModal(false)}
+                  className="w-full py-2.5 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-800 font-bold text-xs cursor-pointer"
+                >
+                  Close
+                </button>
+              </div>
             )}
           </div>
         </div>

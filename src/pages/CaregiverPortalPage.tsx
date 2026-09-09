@@ -701,51 +701,6 @@ export const CaregiverPortalPage: React.FC = () => {
               <span>Verify & Connect Patient</span>
             </button>
           </form>
-
-          {/* Quick Picker for Registered Unassigned Elders */}
-          {availablePatients.length > 0 && (
-            <div className="border-t border-gray-200 pt-5 text-left">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-3">
-                Registered Patients in System:
-              </h4>
-              <div className="space-y-2">
-                {availablePatients.map((p) => (
-                  <div
-                    key={p.id}
-                    className="p-3 bg-gray-50 hover:bg-emerald-50 border border-gray-200 hover:border-emerald-300 rounded-2xl flex items-center justify-between transition-all"
-                  >
-                    <div className="flex items-center gap-3">
-                      <img
-                        src={p.profile_photo_url || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80'}
-                        alt={p.full_name}
-                        className="w-10 h-10 rounded-xl object-cover border border-gray-300"
-                      />
-                      <div>
-                        <div className="font-extrabold text-sm text-gray-900">{p.full_name} ({p.age || 70} yrs)</div>
-                        <div className="text-xs text-gray-500">{p.email || p.phone || p.city}</div>
-                      </div>
-                    </div>
-
-                    {p.isLinkedToOther ? (
-                      <span className="text-[11px] font-bold text-gray-400 bg-gray-200 px-2.5 py-1 rounded-lg">
-                        Already Linked
-                      </span>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (p.email) setPatientEmail(p.email);
-                        }}
-                        className="text-xs font-bold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 px-3 py-1.5 rounded-xl transition-all cursor-pointer"
-                      >
-                        Select & Enter Password
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       </div>
     );
@@ -1373,41 +1328,6 @@ export const CaregiverPortalPage: React.FC = () => {
                 </button>
               </div>
             </form>
-
-            {availablePatients.length > 0 && (
-              <div className="border-t border-gray-100 pt-3 max-h-56 overflow-y-auto space-y-2">
-                <div className="text-[11px] font-bold uppercase text-gray-400">Available Registered Seniors:</div>
-                {availablePatients.map((p) => (
-                  <div
-                    key={p.id}
-                    className="p-2.5 bg-gray-50 hover:bg-emerald-50 border border-gray-200 hover:border-emerald-300 rounded-xl flex items-center justify-between transition-all"
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <img
-                        src={p.profile_photo_url || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80'}
-                        alt={p.full_name}
-                        className="w-8 h-8 rounded-lg object-cover"
-                      />
-                      <div className="min-w-0">
-                        <div className="font-bold text-xs text-gray-900 truncate">{p.full_name}</div>
-                        <div className="text-[10px] text-gray-500 truncate">{p.email || p.phone}</div>
-                      </div>
-                    </div>
-                    {p.isLinkedToOther ? (
-                      <span className="text-[10px] font-bold text-gray-400 bg-gray-200 px-2 py-0.5 rounded">Linked</span>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => handleLinkPatient(p.id)}
-                        className="text-[11px] font-bold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 px-2.5 py-1 rounded-lg cursor-pointer"
-                      >
-                        Connect
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         </div>
       )}

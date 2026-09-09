@@ -985,6 +985,96 @@ class CaregiverService {
       return false;
     }
   }
+
+  /**
+   * Unlinks the assigned caregiver from the elderly patient.
+   * Completely cuts off caregiver access to the patient's data, records, and telemetry.
+   */
+  public async unlinkCaregiverFromPatient(patientId: string): Promise<boolean> {
+    if (!patientId) return false;
+    try {
+      // 1. Query assigned caregiver id
+      let caregiverId: string | null = null;
+      try {
+        const { data: linkRows } = await supabase
+          .from('caregiver_patient')
+          .select('caregiver_id')
+          .eq('patient_id', patientId)
+          .limit(1);
+        if (linkRows && linkRows.length > 0) {
+          caregiverId = linkRows[0].caregiver_id;
+        }
+      } catch {}
+
+      // 2. Delete the link from Supabase caregiver_patient table
+      try {
+        await supabase.from('caregiver_patient').delete().eq('patient_id', patientId);
+      } catch (err) {
+        console.warn('Error deleting caregiver_patient link from Supabase:', err);
+      }
+
+      // 3. Update patient's profile in Supabase to remove caregiver_ids
+      try {
+        await supabase
+          .from('profiles')
+          .update({
+            caregiver_ids: [],
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', patientId);
+      } catch {}
+
+      // 4. Update caregiver's profile in Supabase to remove patient link
+      if (caregiverId) {
+        try {
+          await supabase
+            .from('profiles')
+            .update({
+              caregiver_ids: [],
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', caregiverId);
+        } catch {}
+      }
+
+      // 5. Clean up all local storage keys
+      const allProfiles = authService.getAllProfiles();
+      const pIdx = allProfiles.findIndex((p) => p.id === patientId);
+      if (pIdx >= 0) {
+        allProfiles[pIdx].caregiverIds = [];
+      }
+      if (caregiverId) {
+        const cgIdx = allProfiles.findIndex((p) => p.id === caregiverId);
+        if (cgIdx >= 0) {
+          allProfiles[cgIdx].caregiverIds = [];
+        }
+        localStorage.removeItem(`${STORAGE_KEY_CAREGIVER_PATIENT}_${caregiverId}`);
+      }
+      localStorage.setItem('ms_all_profiles', JSON.stringify(allProfiles));
+
+      // Clear any remaining storage keys mentioning patientId
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith(`${STORAGE_KEY_CAREGIVER_PATIENT}_`)) {
+            const raw = localStorage.getItem(k);
+            if (raw && raw.includes(patientId)) {
+              localStorage.removeItem(k);
+            }
+          }
+        }
+      } catch {}
+
+      // Update active user profile
+      authService.updateCurrentUserProfile({ caregiverIds: [] });
+      authService.setLinkedPatient(null as any);
+
+      return true;
+    } catch (err) {
+      console.error('[CaregiverService] unlinkCaregiverFromPatient exception:', err);
+      return false;
+    }
+  }
 }
 
 export const caregiverService = new CaregiverService();

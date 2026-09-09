@@ -53,7 +53,6 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children, activeTab, onN
     { id: 'reminders', label: t.nav.reminders, icon: Bell },
     { id: 'assistant', label: t.nav.assistant, icon: Bot },
     { id: 'ayushman', label: t.nav.ayushman, icon: Building },
-    { id: 'caregiver', label: t.nav.caregiverPortal, icon: UserCheck },
     { id: 'clinician', label: t.nav.clinicianPortal, icon: Stethoscope },
     { id: 'admin', label: t.nav.adminPortal, icon: ShieldCheck },
   ];
