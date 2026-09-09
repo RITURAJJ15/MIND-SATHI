@@ -35,7 +35,10 @@ import {
   Loader2,
   AlertCircle,
   Copy,
-  Check
+  Check,
+  Eye,
+  EyeOff,
+  Gamepad2,
 } from 'lucide-react';
 
 export const CaregiverPortalPage: React.FC = () => {
@@ -58,15 +61,20 @@ export const CaregiverPortalPage: React.FC = () => {
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
 
-  // Patient linking state
+  // Patient linking state (Email + Password authentication)
   const [assignedPatients, setAssignedPatients] = useState<any[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<any>(null);
+  const [patientEmail, setPatientEmail] = useState('');
+  const [patientPassword, setPatientPassword] = useState('');
+  const [showPatientPassword, setShowPatientPassword] = useState(false);
   const [patientIdentifier, setPatientIdentifier] = useState('');
   const [linkError, setLinkError] = useState('');
+  const [linkSuccess, setLinkSuccess] = useState('');
   const [linkLoading, setLinkLoading] = useState(false);
   const [availablePatients, setAvailablePatients] = useState<any[]>([]);
   const [showLinkModal, setShowLinkModal] = useState(false);
   const [isLoadingPatients, setIsLoadingPatients] = useState<boolean>(true);
+  const [patientGameSessions, setPatientGameSessions] = useState<any[]>([]);
 
   // Gemini Caregiver AI Insights state
   const [aiInsight, setAiInsight] = useState<CaregiverAIInsightResult | null>(null);
@@ -85,10 +93,13 @@ export const CaregiverPortalPage: React.FC = () => {
         // Load patient family members & latest game sessions from Supabase
         familyService.syncFamilyMembersFromDb(primary.id).then((f) => setPatientFamily(f));
         await gameService.syncSessionsFromDb(primary.id);
+        const sessions = gameService.getSessionsForUser(primary.id);
+        setPatientGameSessions(sessions);
         fetchAiInsight(caregiverId, primary.id);
       } else {
         setAssignedPatients([]);
         setSelectedPatient(null);
+        setPatientGameSessions([]);
         // Load available patients to help user link
         caregiverService.getAvailablePatients().then((av) => setAvailablePatients(av));
       }
@@ -210,7 +221,69 @@ export const CaregiverPortalPage: React.FC = () => {
     }
   };
 
-  // Handle Linking Patient (1-to-1 Connection)
+  // Handle Connecting Patient using patient email and password
+  const handleConnectPatientWithCredentials = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!currentUser?.id) return;
+    setLinkError('');
+    setLinkSuccess('');
+
+    const targetEmail = patientEmail.trim();
+    const targetPassword = patientPassword.trim();
+
+    if (!targetEmail || !targetPassword) {
+      setLinkError('Please enter both the patient\'s registered email and password.');
+      return;
+    }
+
+    setLinkLoading(true);
+    try {
+      const res = await caregiverService.linkPatientWithCredentials(
+        currentUser.id,
+        targetEmail,
+        targetPassword
+      );
+
+      if (!res.success || !res.patient) {
+        setLinkError(res.error || 'Could not connect to patient. Please verify email and password.');
+      } else {
+        setLinkSuccess(`Successfully connected to ${res.patient.full_name || res.patient.name}!`);
+        setShowLinkModal(false);
+        setPatientEmail('');
+        setPatientPassword('');
+        setPatientIdentifier('');
+        if (res.patient) {
+          authService.setLinkedPatient(res.patient);
+        }
+        await refreshAssignedPatients(currentUser.id);
+      }
+    } catch (err: any) {
+      setLinkError(err.message || 'Error connecting to patient.');
+    } finally {
+      setLinkLoading(false);
+    }
+  };
+
+  // Handle Disconnecting / Unlinking Patient
+  const handleDisconnectPatient = async () => {
+    if (!currentUser?.id) return;
+    if (window.confirm('Are you sure you want to disconnect from this patient? You can reconnect at any time using the patient\'s email and password.')) {
+      setLinkLoading(true);
+      try {
+        await caregiverService.unlinkPatient(currentUser.id);
+        setSelectedPatient(null);
+        setAssignedPatients([]);
+        setPatientFamily([]);
+        setPatientGameSessions([]);
+        setAiInsight(null);
+        caregiverService.getAvailablePatients().then((av) => setAvailablePatients(av));
+      } finally {
+        setLinkLoading(false);
+      }
+    }
+  };
+
+  // Handle Linking Patient fallback
   const handleLinkPatient = async (targetIdOrEmail: string) => {
     if (!currentUser?.id) return;
     setLinkError('');
@@ -516,17 +589,47 @@ export const CaregiverPortalPage: React.FC = () => {
   // ──────────────────────────────────────────────────────────────────────────
   if (assignedPatients.length === 0) {
     return (
-      <div className="max-w-2xl mx-auto py-8 px-4 animate-fade-in">
-        <div className="bg-white p-8 rounded-3xl shadow-elder border border-amber-200">
+      <div className="max-w-2xl mx-auto py-8 px-4 animate-fade-in space-y-6">
+        {/* Caregiver Identity Card */}
+        <div className="bg-white p-5 rounded-3xl shadow-elder border border-emerald-200 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3.5">
+            <img
+              src={
+                currentUser?.avatarUrl ||
+                `https://api.dicebear.com/9.x/avataaars/svg?seed=${currentUser?.id}&backgroundColor=b6e3f4`
+              }
+              alt={currentUser?.name || 'Caregiver'}
+              className="w-14 h-14 rounded-2xl object-cover border-2 border-emerald-400 shadow-sm"
+            />
+            <div className="text-left">
+              <div className="text-[11px] font-black uppercase tracking-wider text-emerald-700 flex items-center gap-1.5">
+                <UserCheck className="w-4 h-4 text-emerald-600" />
+                <span>Authorized Caregiver</span>
+              </div>
+              <div className="text-lg font-black text-gray-900">
+                {currentUser?.name || currentUser?.preferredName || 'Caregiver'}
+              </div>
+              <div className="text-xs text-gray-500 font-medium">{currentUser?.email}</div>
+            </div>
+          </div>
+          <div className="text-right">
+            <span className="text-[11px] font-bold text-amber-800 bg-amber-50 border border-amber-300 px-3 py-1 rounded-full">
+              No Patient Linked Yet
+            </span>
+          </div>
+        </div>
+
+        {/* Patient Connection Form with Email & Password */}
+        <div className="bg-white p-8 rounded-3xl shadow-elder border border-emerald-200">
           <div className="text-center mb-6">
-            <div className="w-16 h-16 bg-amber-100 text-amber-800 rounded-3xl flex items-center justify-center mx-auto mb-3 border border-amber-300">
-              <LinkIcon className="w-8 h-8 text-amber-700" />
+            <div className="w-16 h-16 bg-emerald-100 text-emerald-800 rounded-3xl flex items-center justify-center mx-auto mb-3 border border-emerald-300">
+              <LinkIcon className="w-8 h-8 text-emerald-700" />
             </div>
             <h2 className="text-2xl font-black text-gray-900">
-              Connect to Your Senior (Patient)
+              Connect with Your Patient
             </h2>
-            <p className="text-sm text-gray-600 mt-1 max-w-md mx-auto">
-              Every elderly patient report connects strictly to <strong>one caregiver</strong>. Enter your loved one's registered email, phone number, or patient code.
+            <p className="text-sm text-gray-600 mt-1 max-w-md mx-auto leading-relaxed">
+              Enter your patient's registered email address and account password to securely authorize and connect this caregiver panel.
             </p>
           </div>
 
@@ -537,42 +640,73 @@ export const CaregiverPortalPage: React.FC = () => {
             </div>
           )}
 
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              handleLinkPatient(patientIdentifier);
-            }}
-            className="space-y-4 mb-6"
-          >
+          {linkSuccess && (
+            <div className="p-3.5 mb-5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold rounded-xl flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+              <span>{linkSuccess}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleConnectPatientWithCredentials} className="space-y-4 mb-6 text-left">
             <div>
               <label className="block text-xs font-bold text-gray-700 mb-1">
-                Senior's Registered Email or Phone Number
+                Patient's Registered Email Address
               </label>
-              <input
-                type="text"
-                required
-                value={patientIdentifier}
-                onChange={(e) => setPatientIdentifier(e.target.value)}
-                placeholder="e.g. biren.borah@gmail.com or +91 94350 12890"
-                className="w-full bg-gray-50 border border-gray-300 rounded-xl px-4 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
+              <div className="relative">
+                <Mail className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                <input
+                  type="email"
+                  required
+                  value={patientEmail}
+                  onChange={(e) => setPatientEmail(e.target.value)}
+                  placeholder="e.g. dadi@mindsathi.in"
+                  className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-10 pr-4 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1">
+                Patient's Account Password
+              </label>
+              <div className="relative">
+                <Lock className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                <input
+                  type={showPatientPassword ? 'text' : 'password'}
+                  required
+                  value={patientPassword}
+                  onChange={(e) => setPatientPassword(e.target.value)}
+                  placeholder="Enter patient account password"
+                  className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-10 pr-10 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPatientPassword(!showPatientPassword)}
+                  className="absolute right-3.5 top-3.5 text-gray-400 hover:text-gray-600 cursor-pointer"
+                >
+                  {showPatientPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <p className="text-[11px] text-gray-400 mt-1">
+                Patient password is used once to securely verify authorization and bind this account strictly 1-to-1.
+              </p>
             </div>
 
             <button
               type="submit"
               disabled={linkLoading}
-              className="w-full py-3 bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-sm rounded-xl shadow-tactile transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+              className="w-full py-3.5 bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-800 hover:to-teal-800 text-white font-black text-sm rounded-xl shadow-tactile transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {linkLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <LinkIcon className="w-4 h-4" />}
-              <span>Link Patient & Access Dashboard</span>
+              <span>Verify & Connect Patient</span>
             </button>
           </form>
 
           {/* Quick Picker for Registered Unassigned Elders */}
           {availablePatients.length > 0 && (
-            <div className="border-t border-gray-200 pt-5">
+            <div className="border-t border-gray-200 pt-5 text-left">
               <h4 className="text-xs font-bold uppercase tracking-wider text-gray-500 mb-3">
-                Or Select From Available Registered Elders:
+                Registered Patients in System:
               </h4>
               <div className="space-y-2">
                 {availablePatients.map((p) => (
@@ -599,10 +733,12 @@ export const CaregiverPortalPage: React.FC = () => {
                     ) : (
                       <button
                         type="button"
-                        onClick={() => handleLinkPatient(p.id)}
+                        onClick={() => {
+                          if (p.email) setPatientEmail(p.email);
+                        }}
                         className="text-xs font-bold text-emerald-800 bg-emerald-100 hover:bg-emerald-200 px-3 py-1.5 rounded-xl transition-all cursor-pointer"
                       >
-                        Connect
+                        Select & Enter Password
                       </button>
                     )}
                   </div>
@@ -625,6 +761,47 @@ export const CaregiverPortalPage: React.FC = () => {
 
   return (
     <div className="space-y-6 animate-fade-in max-w-5xl mx-auto">
+      {/* ── CAREGIVER IDENTITY BAR ── */}
+      <div className="bg-white p-4 sm:p-5 rounded-3xl shadow-elder border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-left">
+        <div className="flex items-center gap-3.5">
+          <img
+            src={
+              currentUser?.avatarUrl ||
+              `https://api.dicebear.com/9.x/avataaars/svg?seed=${currentUser?.id}&backgroundColor=b6e3f4`
+            }
+            alt={currentUser?.name || 'Caregiver'}
+            className="w-14 h-14 rounded-2xl object-cover border-2 border-emerald-400 shadow-sm"
+          />
+          <div>
+            <div className="text-[11px] font-black uppercase tracking-wider text-emerald-700 flex items-center gap-1.5">
+              <UserCheck className="w-4 h-4 text-emerald-600" />
+              <span>Logged In Caregiver</span>
+            </div>
+            <div className="text-lg font-black text-gray-900">
+              {currentUser?.name || currentUser?.preferredName || 'Caregiver'}
+            </div>
+            <div className="text-xs text-gray-500 font-medium">{currentUser?.email}</div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Live Green Dot Connected Status */}
+          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-50 border-2 border-emerald-400 text-emerald-800 text-xs font-black shadow-xs">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shadow-xs" />
+            <span>Connected: {selectedPatient.full_name || selectedPatient.name}</span>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleDisconnectPatient}
+            disabled={linkLoading}
+            className="text-xs font-bold text-gray-600 hover:text-red-700 bg-gray-100 hover:bg-red-50 border border-gray-200 hover:border-red-200 px-3.5 py-2 rounded-xl transition-all cursor-pointer"
+          >
+            Disconnect / Switch Patient
+          </button>
+        </div>
+      </div>
+
       {/* Header Banner */}
       <div className="bg-gradient-to-r from-teal-800 via-emerald-800 to-slate-900 text-white p-6 sm:p-8 rounded-3xl shadow-elder flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
@@ -687,9 +864,9 @@ export const CaregiverPortalPage: React.FC = () => {
                 <h2 className="text-xl font-black text-gray-900">
                   {selectedPatient.full_name || selectedPatient.name}
                 </h2>
-                <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Strict 1-to-1 Connected Senior</span>
+                <span className="text-xs font-extrabold px-3 py-1 rounded-full bg-emerald-100 text-emerald-900 border border-emerald-300 flex items-center gap-1.5 shadow-xs">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>Connected Patient</span>
                 </span>
               </div>
               <p className="text-xs text-gray-500 mt-0.5">
@@ -916,6 +1093,85 @@ export const CaregiverPortalPage: React.FC = () => {
         </div>
       </div>
 
+      {/* 30-Day Cognitive Telemetry & Game Session Records */}
+      <div className="bg-white p-6 rounded-3xl shadow-elder border border-emerald-200">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4 pb-3 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <Activity className="w-6 h-6 text-emerald-600" />
+            <div>
+              <h3 className="text-lg font-extrabold text-gray-900">
+                {selectedPatient.full_name}'s Cognitive Play Records
+              </h3>
+              <p className="text-xs text-gray-500">
+                Verified database sessions: Accuracy, Score, Reaction Time, and Domain Metrics
+              </p>
+            </div>
+          </div>
+          <span className="text-xs font-bold bg-emerald-100 text-emerald-800 px-3 py-1 rounded-full border border-emerald-300 self-start sm:self-auto">
+            {patientGameSessions.length} Recorded Sessions
+          </span>
+        </div>
+
+        {patientGameSessions.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead>
+                <tr className="bg-gray-50 text-gray-600 font-bold uppercase text-[10px] border-b border-gray-200">
+                  <th className="py-2.5 px-3">Date & Time</th>
+                  <th className="py-2.5 px-3">Game</th>
+                  <th className="py-2.5 px-3">Difficulty</th>
+                  <th className="py-2.5 px-3">Accuracy</th>
+                  <th className="py-2.5 px-3">Score</th>
+                  <th className="py-2.5 px-3">Duration</th>
+                  <th className="py-2.5 px-3">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {patientGameSessions.map((sess: any) => (
+                  <tr key={sess.id} className="hover:bg-emerald-50/40 transition-colors">
+                    <td className="py-3 px-3 font-semibold text-gray-700 whitespace-nowrap">
+                      {new Date(sess.timestamp).toLocaleDateString('en-IN', {
+                        day: 'numeric',
+                        month: 'short',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </td>
+                    <td className="py-3 px-3 font-bold text-gray-900 capitalize whitespace-nowrap">
+                      {sess.gameId.replace('_', ' ')}
+                    </td>
+                    <td className="py-3 px-3 capitalize text-gray-600 whitespace-nowrap">
+                      <span className="px-2 py-0.5 rounded-md bg-gray-100 text-gray-700 font-semibold text-[10px]">
+                        {sess.difficulty || 'saral'}
+                      </span>
+                    </td>
+                    <td className="py-3 px-3 font-black text-emerald-700 whitespace-nowrap">
+                      {sess.accuracy}%
+                    </td>
+                    <td className="py-3 px-3 font-black text-gray-900 whitespace-nowrap">
+                      {sess.score} pts
+                    </td>
+                    <td className="py-3 px-3 text-gray-500 whitespace-nowrap">
+                      {sess.durationSeconds ? `${Math.round(sess.durationSeconds / 60)} min` : '--'}
+                    </td>
+                    <td className="py-3 px-3 whitespace-nowrap">
+                      <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-full">
+                        <CheckCircle2 className="w-3 h-3" />
+                        Completed
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="text-center py-8 text-xs text-gray-500">
+            No game sessions recorded for {selectedPatient.full_name} yet. Sessions will appear here in real-time as games are played.
+          </div>
+        )}
+      </div>
+
       {/* Patient's Registered Family Members with Photos */}
       <div className="bg-white p-6 rounded-3xl shadow-elder border border-rose-200">
         <div className="flex items-center justify-between mb-4">
@@ -1054,25 +1310,52 @@ export const CaregiverPortalPage: React.FC = () => {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                handleLinkPatient(patientIdentifier);
+                handleConnectPatientWithCredentials();
               }}
-              className="space-y-3 mb-4"
+              className="space-y-3 mb-4 text-left"
             >
               <div>
                 <label className="block text-xs font-bold text-gray-700 mb-1">
-                  Senior's Registered Email or Phone Number
+                  Senior's Registered Email Address
                 </label>
-                <input
-                  type="text"
-                  required
-                  value={patientIdentifier}
-                  onChange={(e) => setPatientIdentifier(e.target.value)}
-                  placeholder="e.g. dadi@mindsathi.in or 9876543210"
-                  className="w-full bg-gray-50 border border-gray-300 rounded-xl px-4 py-2.5 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
+                <div className="relative">
+                  <Mail className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
+                  <input
+                    type="email"
+                    required
+                    value={patientEmail}
+                    onChange={(e) => setPatientEmail(e.target.value)}
+                    placeholder="e.g. dadi@mindsathi.in"
+                    className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-9 pr-4 py-2.5 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
               </div>
 
-              <div className="flex gap-2">
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">
+                  Senior's Account Password
+                </label>
+                <div className="relative">
+                  <Lock className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
+                  <input
+                    type={showPatientPassword ? 'text' : 'password'}
+                    required
+                    value={patientPassword}
+                    onChange={(e) => setPatientPassword(e.target.value)}
+                    placeholder="Enter patient's password"
+                    className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-9 pr-9 py-2.5 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPatientPassword(!showPatientPassword)}
+                    className="absolute right-2.5 top-2.5 text-gray-400 hover:text-gray-600 cursor-pointer"
+                  >
+                    {showPatientPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => { setShowLinkModal(false); setLinkError(''); }}
@@ -1086,7 +1369,7 @@ export const CaregiverPortalPage: React.FC = () => {
                   className="flex-1 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs rounded-xl shadow-sm cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
                 >
                   {linkLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <LinkIcon className="w-3.5 h-3.5" />}
-                  <span>Connect Senior</span>
+                  <span>Verify & Connect</span>
                 </button>
               </div>
             </form>

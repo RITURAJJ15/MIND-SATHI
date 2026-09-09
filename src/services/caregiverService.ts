@@ -1,4 +1,4 @@
-import { authService } from './authService';
+import { authService, getDeterministicUserId } from './authService';
 import { gameService } from './gameService';
 import { dailyPlanService } from './dailyPlanService';
 import { supabase } from '../lib/supabase';
@@ -888,6 +888,101 @@ class CaregiverService {
     } catch (err: any) {
       console.error('[CaregiverService] linkPatientToCaregiver exception:', err);
       return { success: false, error: err.message || 'Error linking patient.' };
+    }
+  }
+
+  /**
+   * Connects an elderly patient to a caregiver using the patient's registered email and password.
+   * Enforces STRICT 1-TO-1 RELATIONSHIP:
+   * - Verifies that the patient credentials are valid (via Supabase auth and local credentials).
+   * - Verifies that the account is registered as an elderly patient.
+   * - Verifies the patient is not already connected to another caregiver.
+   * - Stores the 1-to-1 link in Supabase database `caregiver_patient` table and `profiles` table.
+   * - Stores the 1-to-1 link in persistent local storage so data is never lost after logout.
+   * - Syncs all real patient records, telemetry, family members, and reminders.
+   */
+  public async linkPatientWithCredentials(
+    caregiverId: string,
+    patientEmail: string,
+    patientPassword: string
+  ): Promise<{ success: boolean; error?: string; patient?: any }> {
+    if (!caregiverId || !patientEmail.trim() || !patientPassword.trim()) {
+      return { success: false, error: 'Caregiver ID, Patient email, and Patient password are required.' };
+    }
+
+    const cleanEmail = patientEmail.trim().toLowerCase();
+
+    // 1. Verify Patient Credentials
+    let authenticated = false;
+    let targetPatientId: string | null = null;
+
+    // Check Supabase Auth
+    try {
+      const { data: sbData, error: sbErr } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password: patientPassword,
+      });
+
+      if (!sbErr && sbData?.user) {
+        authenticated = true;
+        targetPatientId = sbData.user.id;
+      } else if (sbErr) {
+        const errCode = (sbErr as any).code;
+        const errMsg = (sbErr.message || '').toLowerCase();
+        if (errCode === 'email_not_confirmed' || errMsg.includes('confirm')) {
+          authenticated = true;
+          targetPatientId = getDeterministicUserId(cleanEmail);
+        }
+      }
+    } catch (e) {
+      console.warn('[CaregiverService] Supabase patient auth check note:', e);
+    }
+
+    // Check local stored credentials fallback
+    if (!authenticated) {
+      try {
+        const credsRaw = localStorage.getItem('ms_local_credentials');
+        if (credsRaw) {
+          const creds = JSON.parse(credsRaw) as any[];
+          const match = creds.find(
+            (c) => c.email.toLowerCase() === cleanEmail && c.password === patientPassword
+          );
+          if (match) {
+            authenticated = true;
+            targetPatientId = match.userId;
+          }
+        }
+      } catch {}
+    }
+
+    if (!authenticated || !targetPatientId) {
+      return {
+        success: false,
+        error: 'Invalid patient email or password. Please verify the credentials entered.',
+      };
+    }
+
+    // Now link using linkPatientToCaregiver with verified identity
+    return await this.linkPatientToCaregiver(caregiverId, cleanEmail);
+  }
+
+  /**
+   * Unlinks the currently connected patient from the caregiver.
+   */
+  public async unlinkPatient(caregiverId: string): Promise<boolean> {
+    if (!caregiverId) return false;
+    try {
+      await supabase.from('caregiver_patient').delete().eq('caregiver_id', caregiverId);
+      localStorage.removeItem(`${STORAGE_KEY_CAREGIVER_PATIENT}_${caregiverId}`);
+      const allProfiles = authService.getAllProfiles();
+      const cg = allProfiles.find((p) => p.id === caregiverId);
+      if (cg) {
+        cg.caregiverIds = [];
+        localStorage.setItem('ms_all_profiles', JSON.stringify(allProfiles));
+      }
+      return true;
+    } catch {
+      return false;
     }
   }
 }

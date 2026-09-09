@@ -26,9 +26,12 @@ import {
   Grid3x3,
   BookOpen,
 } from 'lucide-react';
+import { CaregiverAuthModal } from '../components/caregiver/CaregiverAuthModal';
+import type { AuthRole } from '../types/auth';
 
 interface LandingPageProps {
-  onEnterApp: (screen?: 'login' | 'register') => void;
+  onEnterApp: (screen?: 'login' | 'register', role?: AuthRole) => void;
+  onCaregiverSuccess?: () => void;
 }
 
 function scrollToSection(id: string) {
@@ -230,10 +233,12 @@ function AnimatedProgressPanel() {
   );
 }
 
-export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp }) => {
+export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregiverSuccess }) => {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const [activeGame, setActiveGame] = useState<string | null>(null);
+  const [caregiverModalOpen, setCaregiverModalOpen] = useState(false);
+  const [caregiverInitialMode, setCaregiverInitialMode] = useState<'login' | 'register'>('login');
 
   useEffect(() => {
     const handler = () => setScrolled(window.scrollY > 60);
@@ -277,7 +282,16 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp }) => {
             </nav>
 
             {/* CTA Buttons */}
-            <div className="hidden lg:flex items-center gap-3">
+            <div className="hidden lg:flex items-center gap-2.5">
+              <button
+                onClick={() => { setCaregiverInitialMode('login'); setCaregiverModalOpen(true); }}
+                type="button"
+                id="nav-caregiver-btn"
+                className="px-4 py-2.5 rounded-xl text-sm font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border-2 border-emerald-300 transition-all cursor-pointer flex items-center gap-1.5 shadow-sm hover:shadow"
+              >
+                <UserCheck className="w-4 h-4 text-emerald-600" />
+                <span>Caregiver Portal</span>
+              </button>
               <button onClick={() => onEnterApp('login')} type="button" id="nav-login-btn" className="px-5 py-2.5 rounded-xl text-sm font-bold text-sathi-700 border-2 border-sathi-300 hover:bg-sathi-50 transition-all cursor-pointer">
                 Login
               </button>
@@ -301,7 +315,17 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp }) => {
                 {label}
               </button>
             ))}
-            <div className="flex gap-3 pt-3 border-t border-gray-100">
+            <div className="pt-2">
+              <button
+                onClick={() => { setCaregiverInitialMode('login'); setCaregiverModalOpen(true); setMobileMenuOpen(false); }}
+                type="button"
+                className="w-full py-3 px-4 rounded-xl font-extrabold text-sm text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border-2 border-emerald-300 flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+              >
+                <UserCheck className="w-4 h-4 text-emerald-700" />
+                <span>Caregiver Portal (Sign In / Register)</span>
+              </button>
+            </div>
+            <div className="flex gap-3 pt-2 border-t border-gray-100">
               <button onClick={() => onEnterApp('login')} type="button" className="flex-1 py-3 rounded-xl font-bold border-2 border-sathi-300 text-sathi-700 hover:bg-sathi-50 cursor-pointer">Login</button>
               <button onClick={() => onEnterApp('register')} type="button" className="flex-1 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-sathi-600 to-amber-600 cursor-pointer">Get Started</button>
             </div>
@@ -350,6 +374,19 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp }) => {
                     <CheckCircle2 className="w-4 h-4 text-emerald-500" />{text}
                   </span>
                 ))}
+              </div>
+              <div className="mt-5 flex items-center gap-2.5 justify-center lg:justify-start flex-wrap">
+                <span className="text-xs text-gray-600 font-semibold">Are you a family caregiver?</span>
+                <button
+                  onClick={() => { setCaregiverInitialMode('login'); setCaregiverModalOpen(true); }}
+                  type="button"
+                  id="hero-caregiver-cta"
+                  className="text-xs font-black text-emerald-800 hover:text-emerald-950 bg-emerald-50 hover:bg-emerald-100 px-3.5 py-1.5 rounded-xl border border-emerald-300 flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
+                >
+                  <UserCheck className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Caregiver Direct Log In / Sign Up</span>
+                  <ArrowRight className="w-3 h-3 text-emerald-600" />
+                </button>
               </div>
             </div>
             {/* Illustration */}
@@ -612,6 +649,25 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp }) => {
                   </div>
                 ))}
               </div>
+              <div className="mt-8 flex flex-col sm:flex-row gap-3">
+                <button
+                  onClick={() => { setCaregiverInitialMode('login'); setCaregiverModalOpen(true); }}
+                  type="button"
+                  id="caregiver-section-login-btn"
+                  className="px-6 py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white font-extrabold text-sm shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <UserCheck className="w-4 h-4" />
+                  <span>Caregiver Sign In</span>
+                </button>
+                <button
+                  onClick={() => { setCaregiverInitialMode('register'); setCaregiverModalOpen(true); }}
+                  type="button"
+                  id="caregiver-section-register-btn"
+                  className="px-6 py-3.5 rounded-2xl bg-white hover:bg-indigo-50 text-indigo-900 font-bold text-sm border-2 border-indigo-200 shadow-sm transition-all cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <span>Create Caregiver Account</span>
+                </button>
+              </div>
             </FadeUp>
             <FadeUp delay={150}>
               {/* Caregiver portal mockup */}
@@ -784,6 +840,19 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp }) => {
           </div>
         </div>
       </footer>
+
+      <CaregiverAuthModal
+        isOpen={caregiverModalOpen}
+        onClose={() => setCaregiverModalOpen(false)}
+        initialMode={caregiverInitialMode}
+        onSuccess={() => {
+          if (onCaregiverSuccess) {
+            onCaregiverSuccess();
+          } else {
+            onEnterApp('login', 'caregiver');
+          }
+        }}
+      />
     </div>
   );
 };

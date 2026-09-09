@@ -5,6 +5,9 @@ export type AuthRole = 'elderly' | 'caregiver' | 'clinician' | 'admin';
 export interface AuthCredentials {
   email: string;
   password: string;
+  name?: string;
+  role?: AuthRole;
+  avatarUrl?: string;
   rememberMe?: boolean;
   ayushmanMemberId?: string;
 }
@@ -16,6 +19,7 @@ export interface RegisterPayload {
   password: string;
   confirmPassword: string;
   role: AuthRole;
+  avatarUrl?: string;
   isAyushmanMember?: boolean;
   ayushmanMemberId?: string;
 }

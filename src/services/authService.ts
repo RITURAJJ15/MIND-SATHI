@@ -799,11 +799,17 @@ class AuthService {
       reminderService.syncRemindersFromDb(profile.id).catch(() => {});
       gameService.syncSessionsFromDb(profile.id).catch(() => {});
     } else if (profile.role === 'caregiver') {
+      if (credentials.name?.trim()) {
+        profile.name = credentials.name.trim();
+        profile.preferredName = credentials.name.trim().split(' ')[0];
+      }
+      if (credentials.avatarUrl?.trim()) {
+        profile.avatarUrl = credentials.avatarUrl.trim();
+        saveAvatarToCache(profile.id, normalizedEmail, credentials.avatarUrl.trim());
+      }
       this.caregiverProfile = profile;
       localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(profile));
-      if (!this.patientProfile) {
-        this.currentProfile = profile;
-      }
+      this.currentProfile = profile;
       // Immediately resolve and link the strictly connected patient for this caregiver
       this.resolveConnectedPatientForCaregiver(profile.id, normalizedEmail).then((connectedPatient) => {
         if (connectedPatient) {
@@ -985,7 +991,7 @@ class AuthService {
       role: payload.role,
       age: payload.role === 'elderly' ? 70 : 35,
       gender: 'other',
-      avatarUrl: `https://api.dicebear.com/9.x/avataaars/svg?seed=${userId}&backgroundColor=b6e3f4`,
+      avatarUrl: payload.avatarUrl || `https://api.dicebear.com/9.x/avataaars/svg?seed=${userId}&backgroundColor=b6e3f4`,
       primaryLanguage: 'en',
       city: 'Guwahati',
       state: 'Assam',
@@ -1016,6 +1022,10 @@ class AuthService {
       phone: payload.mobile,
     };
 
+    if (payload.avatarUrl) {
+      saveAvatarToCache(userId, email, payload.avatarUrl);
+    }
+
     if (newProfile.role === 'elderly' || (newProfile.role as string) === 'patient') {
       this.patientProfile = newProfile;
       localStorage.setItem(SK_PATIENT_PROFILE, JSON.stringify(newProfile));
@@ -1023,9 +1033,7 @@ class AuthService {
     } else if (newProfile.role === 'caregiver') {
       this.caregiverProfile = newProfile;
       localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(newProfile));
-      if (!this.patientProfile) {
-        this.currentProfile = newProfile;
-      }
+      this.currentProfile = newProfile;
     } else {
       this.currentProfile = newProfile;
     }
@@ -1216,10 +1224,12 @@ class AuthService {
    * For Home Page and all other screens, returns the Patient profile.
    */
   public getCurrentUser(contextTab?: string): UserProfile | null {
+    if (this.currentProfile?.role === 'caregiver') {
+      return this.currentProfile;
+    }
     if (contextTab === 'caregiver') {
       const cg = this.getCaregiverProfile();
       if (cg) return cg;
-      if (this.currentProfile?.role === 'caregiver') return this.currentProfile;
       if (this.currentProfile && (this.currentProfile.role === 'elderly' || (this.currentProfile.role as string) === 'patient')) {
         return this.currentProfile;
       }

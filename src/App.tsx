@@ -26,7 +26,7 @@ import { authService } from './services/authService';
 import { useCurrentUser } from './hooks/useCurrentUser';
 import type { AuthScreen, AuthRole } from './types/auth';
 import type { GameId, DifficultyTier } from './types/game';
-import { Brain } from 'lucide-react';
+import { Brain, LogOut } from 'lucide-react';
 
 // Role → default tab after login/register
 const roleToTab: Record<AuthRole, string> = {
@@ -112,7 +112,15 @@ export const App: React.FC = () => {
 
   // ── Landing page ───────────────────────────────────────────────────────────
   if (showLanding && !isAuthenticated) {
-    return <LandingPage onEnterApp={handleEnterApp} />;
+    return (
+      <LandingPage
+        onEnterApp={handleEnterApp}
+        onCaregiverSuccess={() => {
+          setActiveTab('caregiver');
+          setShowLanding(false);
+        }}
+      />
+    );
   }
 
   // ── Auth screens (not yet authenticated) ──────────────────────────────────
@@ -161,7 +169,74 @@ export const App: React.FC = () => {
     );
   }
 
-  // ── Main app (authenticated) ───────────────────────────────────────────────
+  // ── Dedicated Caregiver Portal View (Strictly patient oversight & records) ──
+  if (currentUser?.role === 'caregiver') {
+    return (
+      <div className="min-h-screen flex flex-col bg-[#F8FAFC]">
+        {/* Caregiver Dedicated Header */}
+        <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-emerald-100 shadow-xs">
+          <div className="max-w-7xl mx-auto px-3 sm:px-6 py-2.5 sm:py-3 flex items-center justify-between gap-3">
+            {/* Logo */}
+            <div className="flex items-center gap-2.5 sm:gap-3">
+              <div className="w-9 h-9 sm:w-10 sm:h-10 flex items-center justify-center shrink-0">
+                <img src="/logo_icon.png" alt="MIND SATHI Logo" className="w-full h-full object-contain drop-shadow-xs" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-lg sm:text-xl font-black text-gray-900 tracking-tight">
+                    MIND SATHI
+                  </span>
+                  <span className="text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full border border-emerald-300">
+                    Caregiver Panel
+                  </span>
+                </div>
+                <p className="text-[11px] text-gray-500 font-semibold hidden sm:block">
+                  Dedicated Patient Oversight & Cognitive Wellness Records
+                </p>
+              </div>
+            </div>
+
+            {/* Caregiver Name, Photo & Logout */}
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2.5 bg-emerald-50/80 border border-emerald-200 px-3 py-1.5 rounded-2xl">
+                <img
+                  src={
+                    currentUser.avatarUrl ||
+                    `https://api.dicebear.com/9.x/avataaars/svg?seed=${currentUser.id}&backgroundColor=b6e3f4`
+                  }
+                  alt={currentUser.name || 'Caregiver'}
+                  className="w-8 h-8 rounded-full object-cover border-2 border-emerald-500 shadow-xs"
+                />
+                <div className="text-left hidden sm:block">
+                  <div className="text-xs font-black text-emerald-950 truncate max-w-[150px]">
+                    {currentUser.name || currentUser.preferredName || 'Caregiver'}
+                  </div>
+                  <div className="text-[10px] font-semibold text-emerald-700">Verified Caregiver</div>
+                </div>
+              </div>
+
+              <button
+                onClick={handleLogout}
+                type="button"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-gray-100 hover:bg-rose-50 hover:text-rose-700 text-gray-700 text-xs font-bold transition-all border border-gray-200 hover:border-rose-200 cursor-pointer"
+                title="Log Out"
+              >
+                <LogOut className="w-4 h-4" />
+                <span className="hidden sm:inline">Log Out</span>
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {/* Dedicated Caregiver Main Content — strictly patient details & records */}
+        <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6">
+          <CaregiverPortalPage />
+        </main>
+      </div>
+    );
+  }
+
+  // ── Main app (authenticated elderly / clinician / admin) ──────────────────
   return (
     <MainLayout activeTab={activeTab} onNavigate={handleNavigate} onLogout={handleLogout}>
       {activeTab === 'home'        && <HomePage onNavigate={handleNavigate} />}
