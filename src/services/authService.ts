@@ -274,6 +274,165 @@ class AuthService {
   }
 
   /**
+   * Caregiver Account Creation with Email, Password, Name, and Phone.
+   * Enforces role = 'caregiver' and creates/updates profile in Supabase profiles.
+   */
+  public async signUpCaregiverWithEmail(
+    email: string,
+    password: string,
+    fullName: string,
+    phone?: string
+  ): Promise<{ success: boolean; error?: string; profile?: UserProfile }> {
+    const cleanEmail = (email || '').trim().toLowerCase();
+    const cleanName = (fullName || '').trim();
+
+    if (!cleanEmail || !cleanName) {
+      return { success: false, error: 'Name and email address are required.' };
+    }
+    if (!password || password.length < 6) {
+      return { success: false, error: 'Password must be at least 6 characters.' };
+    }
+
+    try {
+      // 1. Check if email is already registered as an elderly patient
+      const { data: existingProfile } = await supabase
+        .from('profiles')
+        .select('id, role')
+        .ilike('email', cleanEmail)
+        .maybeSingle();
+
+      if (existingProfile && (existingProfile.role === 'elderly' || (existingProfile.role as string) === 'patient')) {
+        return {
+          success: false,
+          error: 'This email is already registered as an Elderly Patient. Caregivers must use a different email address.',
+        };
+      }
+
+      // 2. Register with Supabase Auth
+      const { data: authData, error: signUpErr } = await supabase.auth.signUp({
+        email: cleanEmail,
+        password,
+        options: {
+          data: {
+            full_name: cleanName,
+            name: cleanName,
+            role: 'caregiver',
+            phone: phone || '',
+          },
+        },
+      });
+
+      if (signUpErr) {
+        if (signUpErr.message?.toLowerCase().includes('already registered')) {
+          return await this.signInCaregiverWithEmail(cleanEmail, password);
+        }
+        return { success: false, error: signUpErr.message };
+      }
+
+      const user = authData?.user;
+      if (!user) {
+        return { success: false, error: 'Could not create account. Please try again.' };
+      }
+
+      // 3. Upsert profile in public.profiles table
+      const profileData: any = {
+        id: user.id,
+        role: 'caregiver',
+        full_name: cleanName,
+        email: cleanEmail,
+        phone: phone || '',
+        updated_at: new Date().toISOString(),
+      };
+
+      const { error: upsertErr } = await supabase
+        .from('profiles')
+        .upsert(profileData);
+
+      if (upsertErr) {
+        console.warn('[AuthService] Profile upsert notice:', upsertErr.message);
+      }
+
+      // 4. If session was established immediately
+      if (authData.session) {
+        const synced = await this.syncProfileFromSupabase(user.id, cleanEmail);
+        return { success: true, profile: synced || undefined };
+      } else {
+        const loginRes = await this.signInCaregiverWithEmail(cleanEmail, password);
+        if (loginRes.success) return loginRes;
+        return {
+          success: true,
+          error: 'Account created! Please sign in with your email and password.',
+        };
+      }
+    } catch (err: any) {
+      console.error('[AuthService] signUpCaregiverWithEmail error:', err);
+      return { success: false, error: err.message || 'Failed to create caregiver account.' };
+    }
+  }
+
+  /**
+   * Caregiver Sign In with Email & Password.
+   * Verifies role is 'caregiver'.
+   */
+  public async signInCaregiverWithEmail(
+    email: string,
+    password: string
+  ): Promise<{ success: boolean; error?: string; profile?: UserProfile }> {
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (!cleanEmail || !password) {
+      return { success: false, error: 'Email and password are required.' };
+    }
+
+    try {
+      const { data: authData, error: signInErr } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password,
+      });
+
+      if (signInErr) {
+        return { success: false, error: signInErr.message };
+      }
+
+      const user = authData?.user;
+      if (!user) {
+        return { success: false, error: 'Login failed. User not found.' };
+      }
+
+      // Check role in profiles
+      const { data: dbProfile } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', user.id)
+        .maybeSingle();
+
+      if (dbProfile && (dbProfile.role === 'elderly' || (dbProfile.role as string) === 'patient')) {
+        await supabase.auth.signOut();
+        return {
+          success: false,
+          error: 'This account is registered as an Elderly Patient. Caregivers must use a separate Caregiver account.',
+        };
+      }
+
+      // Ensure caregiver role in profiles
+      if (!dbProfile || dbProfile.role !== 'caregiver') {
+        await supabase.from('profiles').upsert({
+          id: user.id,
+          role: 'caregiver',
+          email: cleanEmail,
+          full_name: user.user_metadata?.full_name || user.user_metadata?.name || 'Caregiver',
+          updated_at: new Date().toISOString(),
+        });
+      }
+
+      const synced = await this.syncProfileFromSupabase(user.id, cleanEmail);
+      return { success: true, profile: synced || undefined };
+    } catch (err: any) {
+      console.error('[AuthService] signInCaregiverWithEmail error:', err);
+      return { success: false, error: err.message || 'Login failed.' };
+    }
+  }
+
+  /**
    * Dedicated handler for processing the OAuth callback route.
    * Extracts user, profile, verifies role, and returns the target route.
    */

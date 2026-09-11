@@ -240,10 +240,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
 
   const handleEnter = (screen?: 'login' | 'register' | 'caregiver-auth', role?: AuthRole) => {
     if (screen === 'caregiver-auth' || role === 'caregiver') {
-      navigate('/caregiver/auth');
-    } else {
-      navigate('/patient/auth');
+      window.location.href = '/caregiver.html';
+      return;
     }
+    navigate('/patient/auth');
     onEnterApp?.(screen, role);
   };
 

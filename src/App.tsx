@@ -61,26 +61,26 @@ export const App: React.FC = () => {
       const userRole = currentUser?.role || session?.user?.role;
 
       if (userRole === 'caregiver' || isCaregiver) {
-        // Caregiver must stay in caregiver area
-        if (currentPath === '/patient/dashboard' || currentPath === '/patient/auth' || currentPath === '/') {
-          navigate('/caregiver/dashboard', true);
-        }
+        // Caregivers use the dedicated standalone portal page
+        window.location.href = '/caregiver.html';
+        return;
       } else if (userRole === 'elderly' || (userRole as string) === 'patient' || isElderly) {
         // Patient must stay in patient area
-        if (currentPath === '/caregiver/dashboard' || currentPath === '/caregiver/auth' || currentPath === '/') {
+        if (currentPath === '/') {
           navigate('/patient/dashboard', true);
         }
       } else if (userRole === 'clinician') {
-        if (currentPath === '/patient/dashboard' || currentPath === '/caregiver/dashboard' || currentPath === '/') {
+        if (currentPath === '/patient/dashboard' || currentPath === '/') {
           navigate('/doctor/dashboard', true);
         }
       }
     } else {
       // Unauthenticated users cannot access dashboard routes
-      if (currentPath === '/patient/dashboard') {
+      if (currentPath === '/caregiver/dashboard' || currentPath === '/caregiver/auth') {
+        window.location.href = '/caregiver.html';
+        return;
+      } else if (currentPath === '/patient/dashboard') {
         navigate('/patient/auth', true);
-      } else if (currentPath === '/caregiver/dashboard') {
-        navigate('/caregiver/auth', true);
       } else if (currentPath === '/doctor/dashboard') {
         navigate('/doctor/auth', true);
       }

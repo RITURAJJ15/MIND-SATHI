@@ -13,7 +13,11 @@ export const OAuthCallbackPage: React.FC = () => {
       try {
         const targetRoute = await authService.handleOAuthCallback();
         if (isMounted) {
-          navigate(targetRoute, true);
+          if (targetRoute === '/caregiver/dashboard' || targetRoute.startsWith('/caregiver')) {
+            window.location.href = '/caregiver.html';
+          } else {
+            navigate(targetRoute, true);
+          }
         }
       } catch (err: any) {
         console.error('[OAuthCallbackPage] error processing callback:', err);

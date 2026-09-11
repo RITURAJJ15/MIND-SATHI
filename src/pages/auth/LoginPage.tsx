@@ -61,7 +61,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onNavigateAuth }) => {
 
           <button
             type="button"
-            onClick={() => navigate('/caregiver/auth')}
+            onClick={() => { window.location.href = '/caregiver.html'; }}
             className="py-3 px-2 rounded-2xl border text-xs font-bold flex flex-col items-center gap-1.5 transition-all cursor-pointer bg-gray-50 border-gray-200 text-gray-600 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-800"
           >
             <User className="w-4 h-4 text-gray-400 group-hover:text-emerald-600" />

@@ -55,6 +55,58 @@ export const CaregiverPortalPage: React.FC = () => {
   const [copiedId, setCopiedId] = useState(false);
   const [loadingCaregiverInfo, setLoadingCaregiverInfo] = useState(false);
   const [authError, setAuthError] = useState('');
+  const [authSuccess, setAuthSuccess] = useState('');
+
+  // Caregiver Authentication form state (Email & Password + Name)
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
+  const [authName, setAuthName] = useState('');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPhone, setAuthPhone] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [authSubmitting, setAuthSubmitting] = useState(false);
+
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthSuccess('');
+    setAuthSubmitting(true);
+
+    try {
+      if (authMode === 'signup') {
+        const res = await authService.signUpCaregiverWithEmail(
+          authEmail.trim(),
+          authPassword,
+          authName.trim(),
+          authPhone.trim()
+        );
+        if (!res.success) {
+          setAuthError(res.error || 'Failed to create caregiver account.');
+        } else if (res.profile) {
+          setAuthSuccess('Caregiver account created successfully!');
+          await refreshAssignedPatients(res.profile.id);
+        } else {
+          setAuthSuccess(res.error || 'Account created! Please sign in with your credentials.');
+          setAuthMode('signin');
+        }
+      } else {
+        const res = await authService.signInCaregiverWithEmail(
+          authEmail.trim(),
+          authPassword
+        );
+        if (!res.success) {
+          setAuthError(res.error || 'Login failed. Please verify your email and password.');
+        } else if (res.profile) {
+          setAuthSuccess('Signed in successfully!');
+          await refreshAssignedPatients(res.profile.id);
+        }
+      }
+    } catch (err: any) {
+      setAuthError(err.message || 'An error occurred during authentication.');
+    } finally {
+      setAuthSubmitting(false);
+    }
+  };
 
   // Patient linking state (Connection Code or Verified Email)
   const [assignedPatients, setAssignedPatients] = useState<any[]>([]);
@@ -228,163 +280,197 @@ export const CaregiverPortalPage: React.FC = () => {
   // ──────────────────────────────────────────────────────────────────────────
   if (!isCaregiver) {
     return (
-      <div className="max-w-2xl mx-auto py-8 px-4 animate-fade-in space-y-6">
-        {/* Patient Status & Linking Information if logged in as elderly patient */}
-        {isElderlyPatient && (
-          <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-elder border border-emerald-200 text-left">
-            {loadingCaregiverInfo ? (
-              <div className="flex items-center justify-center py-6 gap-3 text-gray-500">
-                <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
-                <span className="text-sm font-semibold">Checking caregiver status...</span>
-              </div>
-            ) : assignedCaregiver ? (
-              <div>
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-12 h-12 bg-emerald-100 text-emerald-800 rounded-2xl flex items-center justify-center border border-emerald-300">
-                    <ShieldCheck className="w-6 h-6 text-emerald-700" />
-                  </div>
-                  <div>
-                    <span className="text-xs font-black uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
-                      Active Linked Caregiver
-                    </span>
-                    <h3 className="text-xl font-black text-gray-900 mt-1">
-                      {assignedCaregiver.name || assignedCaregiver.preferredName}
-                    </h3>
-                  </div>
-                </div>
-                <div className="bg-emerald-50/70 rounded-2xl p-4 border border-emerald-100 space-y-2 text-sm">
-                  {assignedCaregiver.phone && (
-                    <div className="flex items-center gap-2 text-gray-700">
-                      <Phone className="w-4 h-4 text-emerald-700" />
-                      <span className="font-semibold">{assignedCaregiver.phone}</span>
-                    </div>
-                  )}
-                  {assignedCaregiver.email && (
-                    <div className="flex items-center gap-2 text-gray-700">
-                      <Mail className="w-4 h-4 text-emerald-700" />
-                      <span className="font-semibold">{assignedCaregiver.email}</span>
-                    </div>
-                  )}
-                  <p className="text-xs text-gray-500 pt-2 border-t border-emerald-200/60">
-                    Your caregiver has secure real-time access to your daily cognitive scores, medication reminders, and safety updates.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      if (!currentUser?.id) return;
-                      if (window.confirm('Are you sure you want to unlink your caregiver? Once unlinked, they will be disconnected and will not be able to access your records.')) {
-                        setLoadingCaregiverInfo(true);
-                        try {
-                          await caregiverService.unlinkCaregiverFromPatient(currentUser.id);
-                          setAssignedCaregiver(null);
-                        } finally {
-                          setLoadingCaregiverInfo(false);
-                        }
-                      }
-                    }}
-                    className="mt-2 px-4 py-2 bg-white hover:bg-rose-50 text-rose-700 hover:text-rose-800 border border-rose-300 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs"
-                  >
-                    Unlink Caregiver
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div>
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="w-12 h-12 bg-amber-100 text-amber-800 rounded-2xl flex items-center justify-center border border-amber-300">
-                    <AlertTriangle className="w-6 h-6 text-amber-700" />
-                  </div>
-                  <div>
-                    <span className="text-xs font-black uppercase tracking-wider text-amber-800 bg-amber-50 px-2.5 py-0.5 rounded-full border border-amber-200">
-                      No Caregiver Assigned Yet
-                    </span>
-                    <h3 className="text-xl font-black text-gray-900 mt-1">
-                      Link Your Family Caregiver
-                    </h3>
-                  </div>
-                </div>
-
-                <p className="text-sm text-gray-600 mb-4 leading-relaxed">
-                  You are signed in as <strong>{currentUser?.name || currentUser?.preferredName || 'Patient'}</strong>. To allow your son, daughter, or designated caregiver to view your daily health summary and memory vault, share your unique Patient ID below:
-                </p>
-
-                <div className="bg-amber-50 rounded-2xl p-4 border border-amber-200 mb-4">
-                  <div className="text-xs font-bold text-amber-900 mb-1">YOUR UNIQUE PATIENT ID</div>
-                  <div className="flex items-center justify-between gap-2 bg-white rounded-xl px-4 py-2.5 border border-amber-300 font-mono text-xs sm:text-sm font-bold text-gray-900">
-                    <span className="truncate select-all">{currentUser?.id}</span>
-                    <button
-                      type="button"
-                      onClick={handleCopyPatientId}
-                      className="shrink-0 flex items-center gap-1 text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-lg cursor-pointer transition-all"
-                    >
-                      {copiedId ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                      <span>{copiedId ? 'Copied!' : 'Copy ID'}</span>
-                    </button>
-                  </div>
-                  {currentUser?.email && (
-                    <div className="mt-2 text-xs text-gray-600">
-                      Registered Email: <span className="font-semibold text-gray-900">{currentUser.email}</span>
-                    </div>
-                  )}
-                </div>
-
-                <p className="text-xs text-gray-500">
-                  Your caregiver can enter this Patient ID or your registered email when they create their account or sign in below.
-                </p>
-              </div>
-            )}
-          </div>
-        )}
-
-        <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-elder border border-emerald-200 text-center">
-          <div className="w-16 h-16 bg-emerald-100 text-emerald-800 rounded-3xl flex items-center justify-center mx-auto mb-4 border border-emerald-300 shadow-sm">
-            <UserCheck className="w-8 h-8 text-emerald-700" />
+      <div className="max-w-xl mx-auto py-6 sm:py-10 px-4 animate-fade-in space-y-6">
+        <div className="bg-white rounded-3xl shadow-elder border border-emerald-200 p-6 sm:p-10 text-center relative overflow-hidden">
+          {/* Header Icon */}
+          <div className="w-16 h-16 bg-gradient-to-tr from-emerald-600 to-teal-500 text-white rounded-3xl flex items-center justify-center mx-auto mb-4 shadow-md shadow-emerald-600/20">
+            <UserCheck className="w-8 h-8" />
           </div>
 
           <h2 className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tight">
-            {currentLang === 'hi' ? 'देखभालकर्ता पोर्टल (Caregiver Portal)' : 'Caregiver Oversight & Safety Hub'}
+            {authMode === 'signup' ? 'Create Caregiver Account' : 'Caregiver Portal Login'}
           </h2>
-          <p className="text-sm text-gray-600 mt-2 mb-6 leading-relaxed max-w-lg mx-auto">
-            {isElderlyPatient
-              ? 'Are you this patient’s family caregiver? Sign in with your separate Caregiver Google account or Caregiver email & password below to connect.'
-              : 'To safeguard senior cognitive health records and view real telemetry, please sign in with your verified Caregiver credentials or create a new Caregiver account.'}
+          <p className="text-xs sm:text-sm text-gray-600 mt-1 mb-6 leading-relaxed max-w-md mx-auto">
+            {authMode === 'signup'
+              ? 'Register with your name and email to connect with your senior and monitor their cognitive progress.'
+              : 'Sign in to access your linked patient\'s cognitive metrics, daily health summary, and safety alerts.'}
           </p>
 
+          {/* Error / Success Banners */}
           {authError && (
-            <div className="max-w-md mx-auto p-3.5 mb-5 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold rounded-xl flex items-center gap-2 text-left">
+            <div className="p-3.5 mb-5 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold rounded-2xl flex items-center gap-2 text-left animate-in fade-in">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
               <span>{authError}</span>
             </div>
           )}
 
-          {/* Direct Google Authentication for Caregivers */}
-          <div className="max-w-md mx-auto space-y-4">
-            <GoogleSignInButton
-              intendedRole="caregiver"
-              label="Continue with Google as Caregiver"
-              className="py-4 shadow-sm hover:shadow-md border-emerald-200 hover:bg-emerald-50/50"
-              onError={(err) => setAuthError(err)}
-            />
-            <div className="bg-emerald-50/70 p-4 rounded-2xl border border-emerald-200 text-left space-y-2">
-              <div className="flex items-center gap-2 text-xs font-black text-emerald-900">
-                <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" />
-                <span>One-Click Verified Google Authentication</span>
+          {authSuccess && (
+            <div className="p-3.5 mb-5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold rounded-2xl flex items-center gap-2 text-left animate-in fade-in">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+              <span>{authSuccess}</span>
+            </div>
+          )}
+
+          {/* Mode Switcher Tabs */}
+          <div className="flex rounded-2xl bg-emerald-50/80 p-1.5 mb-6 border border-emerald-200/70">
+            <button
+              type="button"
+              onClick={() => { setAuthMode('signin'); setAuthError(''); }}
+              className={`flex-1 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+                authMode === 'signin'
+                  ? 'bg-white text-emerald-900 shadow-sm border border-emerald-200/50'
+                  : 'text-gray-600 hover:text-emerald-800'
+              }`}
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              onClick={() => { setAuthMode('signup'); setAuthError(''); }}
+              className={`flex-1 py-2.5 rounded-xl text-xs font-black transition-all cursor-pointer ${
+                authMode === 'signup'
+                  ? 'bg-white text-emerald-900 shadow-sm border border-emerald-200/50'
+                  : 'text-gray-600 hover:text-emerald-800'
+              }`}
+            >
+              Create Account
+            </button>
+          </div>
+
+          {/* Email / Password Form */}
+          <form onSubmit={handleAuthSubmit} className="space-y-4 text-left">
+            {authMode === 'signup' && (
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">
+                  Full Name <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <User className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                  <input
+                    type="text"
+                    required
+                    value={authName}
+                    onChange={(e) => setAuthName(e.target.value)}
+                    placeholder="e.g. Anjali Sharma"
+                    className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-10 pr-4 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
               </div>
-              <p className="text-[11px] text-gray-600 leading-relaxed">
-                Sign in with your personal Google account. Your caregiver profile is automatically created and stored securely in the database.
-              </p>
-              <div className="pt-2 border-t border-emerald-200/60 text-[11px] font-semibold text-amber-800 flex items-start gap-1.5">
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
-                <span>
-                  <strong>Strict Role Separation:</strong> You must use a different Google account from the senior patient. A single Google account cannot serve as both patient and caregiver.
-                </span>
+            )}
+
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1">
+                Email Address <span className="text-rose-500">*</span>
+              </label>
+              <div className="relative">
+                <Mail className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                <input
+                  type="email"
+                  required
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="caregiver@gmail.com"
+                  className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-10 pr-4 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
               </div>
             </div>
 
-            <div className="flex items-center justify-center gap-2 text-xs text-gray-500 font-medium bg-emerald-50/50 p-3 rounded-xl border border-emerald-100">
-              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>Real Authentication • Permanently stored in Supabase</span>
+            {authMode === 'signup' && (
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-1">
+                  Phone Number (Optional)
+                </label>
+                <div className="relative">
+                  <Phone className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                  <input
+                    type="tel"
+                    value={authPhone}
+                    onChange={(e) => setAuthPhone(e.target.value)}
+                    placeholder="+91 98765 43210"
+                    className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-10 pr-4 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-bold text-gray-700 mb-1">
+                Password <span className="text-rose-500">*</span>
+              </label>
+              <div className="relative">
+                <Lock className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  minLength={6}
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="At least 6 characters"
+                  className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-10 pr-10 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-3 text-gray-400 hover:text-gray-600"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
             </div>
+
+            <button
+              type="submit"
+              disabled={authSubmitting}
+              className="w-full py-3.5 bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-800 hover:to-teal-800 text-white font-black text-sm rounded-xl shadow-md transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 mt-2"
+            >
+              {authSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Processing...</span>
+                </>
+              ) : authMode === 'signup' ? (
+                <>
+                  <UserPlus className="w-4 h-4" />
+                  <span>Create Caregiver Account</span>
+                </>
+              ) : (
+                <>
+                  <UserCheck className="w-4 h-4" />
+                  <span>Sign In as Caregiver</span>
+                </>
+              )}
+            </button>
+          </form>
+
+          {/* Divider */}
+          <div className="relative my-6">
+            <div className="absolute inset-0 flex items-center">
+              <div className="w-full border-t border-gray-200" />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-white px-3 font-extrabold text-gray-400">
+                Or Continue With Google
+              </span>
+            </div>
+          </div>
+
+          {/* Google Sign In Button */}
+          <GoogleSignInButton
+            intendedRole="caregiver"
+            label="Continue with Google as Caregiver"
+            className="py-3.5 shadow-xs hover:shadow-md border-emerald-200 hover:bg-emerald-50/40 text-emerald-900 font-extrabold"
+            onError={(err) => setAuthError(err)}
+          />
+
+          {/* Role Separation Notice */}
+          <div className="mt-6 pt-5 border-t border-gray-100 text-left space-y-2 text-[11px] text-gray-500 leading-relaxed bg-emerald-50/40 p-4 rounded-2xl border border-emerald-100">
+            <div className="flex items-center gap-1.5 font-bold text-emerald-900">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>1 Caregiver ↔ 1 Patient Security Protocol</span>
+            </div>
+            <p>
+              Your caregiver account is dedicated to senior safety and family oversight. After signing in, you will connect to your patient by entering their registered email ID.
+            </p>
           </div>
         </div>
       </div>
