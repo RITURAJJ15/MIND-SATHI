@@ -214,14 +214,7 @@ class AdminService {
       }
     });
 
-    // 2. Default Seeded Profiles
-    DEFAULT_PROFILES.forEach((p) => {
-      if (!profileMap.has(p.id)) {
-        profileMap.set(p.id, p);
-      }
-    });
-
-    // 3. Dexie IndexedDB Profiles
+    // 2. Dexie IndexedDB Profiles
     try {
       if (typeof window !== 'undefined') {
         const dexieProfiles = await offlineDb.profiles.toArray();

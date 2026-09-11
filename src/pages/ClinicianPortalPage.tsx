@@ -29,6 +29,7 @@ import {
   Link,
   Loader2,
 } from 'lucide-react';
+import { GoogleSignInButton } from '../components/common/GoogleSignInButton';
 
 export const ClinicianPortalPage: React.FC = () => {
   const { currentLang } = useLanguage();
@@ -159,6 +160,31 @@ export const ClinicianPortalPage: React.FC = () => {
       })
       .join(' ');
   }, [trendData]);
+
+  if (currentUser?.role !== 'clinician') {
+    return (
+      <div className="max-w-md mx-auto py-12 px-4 animate-fade-in text-center">
+        <div className="bg-white p-8 rounded-3xl shadow-elder border border-blue-200">
+          <div className="w-16 h-16 bg-blue-100 text-blue-800 rounded-3xl flex items-center justify-center mx-auto mb-4 border border-blue-300 shadow-sm">
+            <Stethoscope className="w-8 h-8" />
+          </div>
+          <h2 className="text-2xl font-black text-gray-900 tracking-tight">Clinician Portal Access</h2>
+          <p className="text-xs text-gray-500 mt-2 mb-6 leading-relaxed">
+            Please authenticate using your verified Google Account registered as a Healthcare Clinician.
+          </p>
+          <GoogleSignInButton
+            intendedRole="clinician"
+            label="Sign In with Google as Clinician"
+            className="py-3.5 border-blue-200 hover:bg-blue-50/50"
+          />
+          <div className="flex items-center justify-center gap-2 text-xs text-gray-500 font-medium bg-blue-50/50 p-3 rounded-xl border border-blue-100 mt-4">
+            <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
+            <span>Encrypted HIPAA/ABDM clinical telemetry</span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6 animate-fade-in max-w-5xl mx-auto pb-12">

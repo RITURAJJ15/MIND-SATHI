@@ -97,189 +97,47 @@ export interface StoredCredential {
   createdAt: string;
 }
 
-export const DEFAULT_CREDENTIALS: StoredCredential[] = [
-  {
-    email: 'dadi@mindsathi.in',
-    password: 'Sathi123',
-    userId: 'e1000000-0000-4000-a000-000000000001',
-    role: 'elderly',
-    createdAt: '2025-01-01T00:00:00.000Z',
-  },
-  {
-    email: 'admin@mindsathi.in',
-    password: 'Admin@1234',
-    userId: 'c1000000-0000-4000-a000-000000000002',
-    role: 'caregiver',
-    createdAt: '2025-01-01T00:00:00.000Z',
-  },
-  {
-    email: 'rituraj11@mindsathi.in',
-    username: 'RITURAJ11',
-    password: 'RITURAJ@11',
-    userId: 'a1000000-0000-4000-a000-000000000003',
-    role: 'admin',
-    createdAt: '2025-01-01T00:00:00.000Z',
-  },
-];
-
-export const DEFAULT_PROFILES: UserProfile[] = [
-  {
-    id: 'e1000000-0000-4000-a000-000000000001',
-    name: 'Dadi Sathi',
-    preferredName: 'Dadi',
-    role: 'elderly',
-    age: 72,
-    gender: 'female',
-    avatarUrl: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=400&fit=crop&q=80',
-    primaryLanguage: 'hi',
-    city: 'Guwahati',
-    state: 'Assam',
-    northeastRegion: 'Assam',
-    isAyushmanMember: true,
-    ayushmanMemberId: 'PMJAY-AS-9921-4820',
-    ayushmanStatus: 'verified',
-    pmjayStatus: 'verified',
-    abhaStatus: 'verified',
-    abhaId: '91-8472-1092-3847',
-    hasCompletedOnboarding: true,
-    familyMemberCount: 3,
-    caregiverIds: ['c1000000-0000-4000-a000-000000000002'],
-    clinicianIds: [],
-    accessibility: { fontSize: 'large', highContrast: false, textToSpeechAuto: true, soundEffects: true, speechRate: 0.85 },
-    streakDays: 5,
-    totalXp: 350,
-    level: 3,
-    levelTitle: 'Gyaani Sathi',
-    createdAt: '2025-01-01T00:00:00.000Z',
-    email: 'dadi@mindsathi.in',
-    phone: '9876543210',
-  },
-  {
-    id: 'c1000000-0000-4000-a000-000000000002',
-    name: 'Dr. Admin Caregiver',
-    preferredName: 'Admin',
-    role: 'caregiver',
-    age: 45,
-    gender: 'male',
-    avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&fit=crop&q=80',
-    primaryLanguage: 'en',
-    city: 'Guwahati',
-    state: 'Assam',
-    northeastRegion: 'Assam',
-    isAyushmanMember: false,
-    ayushmanStatus: 'none',
-    pmjayStatus: 'none',
-    abhaStatus: 'none',
-    hasCompletedOnboarding: true,
-    familyMemberCount: 0,
-    caregiverIds: [],
-    clinicianIds: [],
-    accessibility: { fontSize: 'normal', highContrast: false, textToSpeechAuto: false, soundEffects: true, speechRate: 1.0 },
-    streakDays: 1,
-    totalXp: 120,
-    level: 2,
-    levelTitle: 'Senior Caregiver',
-    createdAt: '2025-01-01T00:00:00.000Z',
-    email: 'admin@mindsathi.in',
-    phone: '9876543211',
-  },
-  {
-    id: 'a1000000-0000-4000-a000-000000000003',
-    name: 'Rituraj (Platform Administrator)',
-    preferredName: 'Rituraj',
-    role: 'admin',
-    age: 32,
-    gender: 'male',
-    avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&fit=crop&q=80',
-    primaryLanguage: 'en',
-    city: 'Guwahati',
-    state: 'Assam',
-    northeastRegion: 'Assam',
-    isAyushmanMember: false,
-    ayushmanStatus: 'none',
-    pmjayStatus: 'none',
-    abhaStatus: 'none',
-    hasCompletedOnboarding: true,
-    familyMemberCount: 0,
-    caregiverIds: [],
-    clinicianIds: [],
-    accessibility: { fontSize: 'normal', highContrast: false, textToSpeechAuto: false, soundEffects: true, speechRate: 1.0 },
-    streakDays: 10,
-    totalXp: 1500,
-    level: 10,
-    levelTitle: 'Super Administrator',
-    createdAt: '2025-01-01T00:00:00.000Z',
-    email: 'rituraj11@mindsathi.in',
-    phone: '9800000000',
-  },
-];
+export const DEFAULT_CREDENTIALS: StoredCredential[] = [];
+export const DEFAULT_PROFILES: UserProfile[] = [];
 
 export function isRealProfile(p: UserProfile): boolean {
   if (!p || !p.id) return false;
   const id = p.id.toLowerCase();
-  if (id === 'guest' || id.startsWith('elder-') || id.startsWith('caregiver-') || id.startsWith('clinician-') || id.startsWith('u00')) {
+  if (
+    id === 'guest' ||
+    id.startsWith('elder-') ||
+    id.startsWith('caregiver-') ||
+    id.startsWith('clinician-') ||
+    id.startsWith('u00') ||
+    id.startsWith('e1000') ||
+    id.startsWith('c1000') ||
+    id.startsWith('a1000')
+  ) {
     return false;
   }
   const name = (p.name || '').trim().toLowerCase();
-  if (name.includes('shanti devi') || name.includes('bhupen bora') || name.includes('dr. arvind mukherjee')) {
+  if (
+    name.includes('shanti devi') ||
+    name.includes('bhupen bora') ||
+    name.includes('dr. arvind mukherjee') ||
+    name.includes('dadi sathi') ||
+    name.includes('dr. admin caregiver')
+  ) {
     return false;
   }
   return true;
 }
 
 function getStoredCredentials(): StoredCredential[] {
-  try {
-    const raw = localStorage.getItem(SK_CREDENTIALS);
-    let list: StoredCredential[] = [];
-    if (raw) {
-      try {
-        list = JSON.parse(raw) as StoredCredential[];
-      } catch {
-        list = [];
-      }
-    }
-    list = list.filter((c) =>
-      !c.userId.startsWith('elder-') &&
-      !c.userId.startsWith('caregiver-') &&
-      !c.userId.startsWith('clinician-') &&
-      !c.userId.startsWith('u00')
-    );
-    for (const def of DEFAULT_CREDENTIALS) {
-      if (!list.some((c) => c.email.toLowerCase() === def.email.toLowerCase())) {
-        list.push(def);
-      }
-    }
-    return list;
-  } catch {
-    return DEFAULT_CREDENTIALS;
-  }
+  return [];
 }
 
-function saveStoredCredential(cred: StoredCredential) {
-  try {
-    const list = getStoredCredentials().filter(
-      (c) => c.email.toLowerCase() !== cred.email.toLowerCase()
-    );
-    list.unshift(cred);
-    localStorage.setItem(SK_CREDENTIALS, JSON.stringify(list));
-  } catch (e) {
-    console.warn('[AuthService] Could not save credential locally:', e);
-  }
+function saveStoredCredential(_cred: StoredCredential) {
+  // Real Google Account authentication is enforced; no local credentials stored.
 }
 
-function findStoredCredential(emailOrPhone: string): StoredCredential | undefined {
-  const norm = emailOrPhone.trim().toLowerCase();
-  const digits = norm.replace(/\D/g, '');
-  return getStoredCredentials().find((c) => {
-    if (c.email.toLowerCase() === norm) return true;
-    if (c.userId.toLowerCase() === norm) return true;
-    if (c.username && c.username.toLowerCase() === norm) return true;
-    if (c.mobile && digits.length >= 10) {
-      const cDigits = c.mobile.replace(/\D/g, '');
-      if (cDigits.endsWith(digits.slice(-10))) return true;
-    }
-    return false;
-  });
+function findStoredCredential(_emailOrPhone: string): StoredCredential | undefined {
+  return undefined;
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -402,12 +260,9 @@ class AuthService {
       this.allProfiles = [];
     }
 
-    // Seed default demo profiles if not already present
-    for (const dp of DEFAULT_PROFILES) {
-      if (!this.allProfiles.some((p) => p.email?.toLowerCase() === dp.email?.toLowerCase())) {
-        this.allProfiles.push(dp);
-      }
-    }
+    // Purge any legacy fake profiles or credentials from localStorage
+    localStorage.removeItem(SK_CREDENTIALS);
+    this.allProfiles = this.allProfiles.filter(isRealProfile);
     localStorage.setItem(SK_PROFILES, JSON.stringify(this.allProfiles));
 
     // Restore cached patient profile
@@ -801,235 +656,70 @@ class AuthService {
   // ── Public API ──────────────────────────────────────────────────────────────
 
   /**
-   * Sign in with email + password.
-   * Checks Supabase Auth first, with graceful fallback to stored credentials
-   * if Supabase Auth was rate-limited during registration.
+   * Sign in with email + password via Supabase Auth only.
+   * Hardcoded demo credentials and local mock logins have been completely removed.
    */
   public async login(credentials: AuthCredentials): Promise<AuthResult<AuthSession>> {
     const { email, password, rememberMe, ayushmanMemberId } = credentials;
     const normalizedEmail = email.trim().toLowerCase();
 
-    let authenticated = false;
-    let userId: string | null = null;
-    let authRole: UserRole = 'elderly';
-    let authErrorMsg: string | null = null;
-
-    // 1. Try Supabase Auth first
     try {
       const { data: sbData, error: sbError } = await supabase.auth.signInWithPassword({
         email: normalizedEmail,
         password,
       });
 
-      if (!sbError && sbData?.user) {
-        authenticated = true;
-        userId = sbData.user.id;
-        authRole = (sbData.user.user_metadata?.role as UserRole) || 'elderly';
-        saveStoredCredential({
-          email: normalizedEmail,
-          password,
-          userId,
-          role: authRole,
-          createdAt: sbData.user.created_at || new Date().toISOString(),
-        });
-      } else if (sbError) {
-        const errCode = (sbError as any).code;
-        const errMsg = (sbError.message || '').toLowerCase();
-
-        if (errCode === 'email_not_confirmed' || errMsg.includes('confirm')) {
-          // Supabase verified the password matches the account, but email confirmation is pending in Supabase!
-          console.log('[AuthService] Supabase verified credentials with pending email confirmation. Authenticating.');
-          authenticated = true;
-          const localCred = findStoredCredential(normalizedEmail);
-          const foundProfile = this.allProfiles.find(
-            (p) => p.email && p.email.toLowerCase() === normalizedEmail
-          );
-          userId = localCred?.userId || foundProfile?.id || getDeterministicUserId(normalizedEmail);
-          authRole = foundProfile?.role || localCred?.role || 'elderly';
-          saveStoredCredential({
-            email: normalizedEmail,
-            password,
-            userId,
-            role: authRole,
-            createdAt: foundProfile?.createdAt || new Date().toISOString(),
-          });
-        } else if (errCode === 'invalid_credentials' || errMsg.includes('invalid login credentials')) {
-          authErrorMsg = 'Invalid email or password. Please try again.';
-        }
-      }
-    } catch (e) {
-      console.warn('[AuthService] Supabase signIn error:', e);
-    }
-
-    // 2. If Supabase Auth didn't authenticate directly, check stored credentials
-    if (!authenticated) {
-      const localCred = findStoredCredential(normalizedEmail);
-      if (localCred) {
-        if (localCred.password === password) {
-          authenticated = true;
-          userId = localCred.userId;
-          authRole = localCred.role;
-        } else {
-          return {
-            success: false,
-            error: { message: 'Invalid password. Please try again.' },
-          };
-        }
-      }
-    }
-
-    if (!authenticated || !userId) {
-      return {
-        success: false,
-        error: { message: authErrorMsg || 'Invalid email or password. Please try again.' },
-      };
-    }
-
-    // 3. Persist Ayushman ID if provided
-    if (ayushmanMemberId?.trim()) {
-      try {
-        await supabase
-          .from('profiles')
-          .update({
-            is_ayushman_member: true,
-            ayushman_member_id: ayushmanMemberId.trim(),
-            ayushman_status: 'verified',
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', userId);
-      } catch (e) {
-        console.warn('[AuthService] Error updating Ayushman ID:', e);
-      }
-    }
-
-    // 4. Sync or load profile
-    let profile: UserProfile | null = null;
-    try {
-      profile = await this.syncProfileFromSupabase(userId, normalizedEmail);
-    } catch (e) {
-      console.warn('[AuthService] Supabase profile sync fallback:', e);
-    }
-
-    if (!profile) {
-      // Find profile in cached profiles
-      profile = this.allProfiles.find(
-        (p) => p.id === userId || (p.email && p.email.toLowerCase() === normalizedEmail)
-      ) || null;
-
-      if (!profile) {
-        const localCred = findStoredCredential(normalizedEmail);
-        profile = {
-          id: userId,
-          name: normalizedEmail.split('@')[0] || 'MIND SATHI User',
-          preferredName: normalizedEmail.split('@')[0] || 'Sathi',
-          role: localCred?.role || authRole,
-          age: 70,
-          gender: 'other',
-          avatarUrl: `https://api.dicebear.com/9.x/avataaars/svg?seed=${userId}&backgroundColor=b6e3f4`,
-          primaryLanguage: 'en',
-          city: 'Guwahati',
-          state: 'Assam',
-          northeastRegion: 'Assam',
-          isAyushmanMember: false,
-          ayushmanStatus: 'none',
-          pmjayStatus: 'none',
-          abhaStatus: 'none',
-          hasCompletedOnboarding: true,
-          caregiverIds: [],
-          clinicianIds: [],
-          accessibility: {
-            fontSize: 'normal',
-            highContrast: false,
-            textToSpeechAuto: false,
-            soundEffects: true,
-            speechRate: 0.85,
-          },
-          streakDays: 1,
-          totalXp: 50,
-          level: 1,
-          levelTitle: 'Naya Sathi',
-          createdAt: new Date().toISOString(),
-          email: normalizedEmail,
+      if (sbError || !sbData?.user) {
+        return {
+          success: false,
+          error: { message: sbError?.message || 'Authentication failed. Please sign in with your verified Google Account.' },
         };
       }
 
-      const existingIdx = this.allProfiles.findIndex((p) => p.id === profile!.id);
-      if (existingIdx >= 0) {
-        this.allProfiles[existingIdx] = profile;
-      } else {
-        this.allProfiles.unshift(profile);
-      }
-      localStorage.setItem(SK_PROFILES, JSON.stringify(this.allProfiles));
-      offlineDb.profiles.put(profile).catch(() => {});
-    }
-
-    // Ensure genuine avatar is preserved from cache if available
-    const cachedAvatar = getAvatarFromCache(profile.id, normalizedEmail);
-    if (cachedAvatar && profile.avatarUrl.includes('dicebear.com')) {
-      profile.avatarUrl = cachedAvatar;
-      const idx = this.allProfiles.findIndex((p) => p.id === profile!.id);
-      if (idx >= 0) {
-        this.allProfiles[idx] = profile;
-        localStorage.setItem(SK_PROFILES, JSON.stringify(this.allProfiles));
-      }
-    }
-
-    if (profile.role === 'elderly' || (profile.role as string) === 'patient') {
-      this.patientProfile = profile;
-      localStorage.setItem(SK_PATIENT_PROFILE, JSON.stringify(profile));
-      this.currentProfile = profile;
-      // Explicitly link and sync family members, reminders, and game sessions with this patient ID
-      familyService.linkFamilyMembersToPatient(profile.id, normalizedEmail);
-      familyService.syncFamilyMembersFromDb(profile.id).catch(() => {});
-      reminderService.syncRemindersFromDb(profile.id).catch(() => {});
-      gameService.syncSessionsFromDb(profile.id).catch(() => {});
-    } else if (profile.role === 'caregiver') {
-      if (credentials.name?.trim()) {
-        profile.name = credentials.name.trim();
-        profile.preferredName = credentials.name.trim().split(' ')[0];
-      }
-      if (credentials.avatarUrl?.trim()) {
-        profile.avatarUrl = credentials.avatarUrl.trim();
-        saveAvatarToCache(profile.id, normalizedEmail, credentials.avatarUrl.trim());
-      }
-      this.caregiverProfile = profile;
-      localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(profile));
-      this.currentProfile = profile;
-      // Immediately resolve and link the strictly connected patient for this caregiver
-      this.resolveConnectedPatientForCaregiver(profile.id, normalizedEmail).then((connectedPatient) => {
-        if (connectedPatient) {
-          familyService.syncFamilyMembersFromDb(connectedPatient.id).catch(() => {});
-          reminderService.syncRemindersFromDb(connectedPatient.id).catch(() => {});
-          gameService.syncSessionsFromDb(connectedPatient.id).catch(() => {});
+      const userId = sbData.user.id;
+      if (ayushmanMemberId?.trim()) {
+        try {
+          await supabase
+            .from('profiles')
+            .update({
+              is_ayushman_member: true,
+              ayushman_member_id: ayushmanMemberId.trim(),
+              ayushman_status: 'verified',
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', userId);
+        } catch (e) {
+          console.warn('[AuthService] Error updating Ayushman ID:', e);
         }
-      }).catch(() => {});
-    } else {
-      this.currentProfile = profile;
-    }
+      }
 
-    this.session = makeSession(profile, normalizedEmail);
-    if (rememberMe) {
-      this.session.expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      const profile = await this.syncProfileFromSupabase(userId, normalizedEmail);
+      if (!profile) {
+        return {
+          success: false,
+          error: { message: 'Profile not found in database. Please sign in with your Google Account.' },
+        };
+      }
+
+      this.session = makeSession(profile, normalizedEmail);
+      if (rememberMe) {
+        this.session.expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      }
+      localStorage.setItem(SK_SESSION, JSON.stringify(this.session));
+      this.notifyListeners();
+      return { success: true, data: this.session };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: { message: err.message || 'Login failed. Please sign in with Google.' },
+      };
     }
-    localStorage.setItem(SK_SESSION, JSON.stringify(this.session));
-    this.notifyListeners();
-    return { success: true, data: this.session };
   }
 
-  /** Register a new account with Supabase Auth & public.profiles with rate-limit resiliency. */
+  /** Register an account via Supabase Auth & profiles table only. */
   public async register(payload: RegisterPayload): Promise<AuthResult<AuthSession>> {
     const email = payload.email.trim().toLowerCase();
 
-    // 1. If an account already exists locally with this password, log in directly
-    const existingCred = findStoredCredential(email);
-    if (existingCred && existingCred.password === payload.password) {
-      return this.login({ email, password: payload.password });
-    }
-
-    let userId: string | null = null;
-    let registeredWithSupabase = false;
-
-    // 2. Attempt Supabase Auth signUp
     try {
       const { data: sbData, error: sbError } = await supabase.auth.signUp({
         email,
@@ -1043,110 +733,30 @@ class AuthService {
         },
       });
 
-      if (sbError) {
-        const msg = sbError.message.toLowerCase();
-        const isRateLimit =
-          msg.includes('rate limit') ||
-          (sbError as { status?: number }).status === 429 ||
-          (sbError as { code?: string }).code === 'over_email_send_rate_limit';
-        const isAlreadyExists =
-          msg.includes('already') ||
-          msg.includes('registered') ||
-          msg.includes('exists');
-
-        if (isAlreadyExists) {
-          saveStoredCredential({
-            email,
-            password: payload.password,
-            userId: existingCred?.userId || getDeterministicUserId(email),
-            role: payload.role,
-            mobile: payload.mobile,
-            createdAt: new Date().toISOString(),
-          });
-          const loginRes = await this.login({ email, password: payload.password });
-          if (loginRes.success) return loginRes;
-          return {
-            success: false,
-            error: { message: 'Account already exists. Please login.' },
-          };
-        }
-
-        if (isRateLimit) {
-          console.warn(
-            '[AuthService] Supabase email rate limit exceeded. Activating seamless local registration so the user is never blocked.'
-          );
-          // Check if user already exists in Supabase
-          try {
-            const loginRes = await supabase.auth.signInWithPassword({
-              email,
-              password: payload.password,
-            });
-            if (loginRes.data?.user) {
-              userId = loginRes.data.user.id;
-              registeredWithSupabase = true;
-            } else {
-              userId = getDeterministicUserId(email);
-            }
-          } catch {
-            userId = getDeterministicUserId(email);
-          }
-        } else {
-          return { success: false, error: { message: sbError.message } };
-        }
-      } else if (sbData?.user) {
-        // If Supabase returns user with empty identities, email is already registered
-        if (Array.isArray(sbData.user.identities) && sbData.user.identities.length === 0) {
-          saveStoredCredential({
-            email,
-            password: payload.password,
-            userId: sbData.user.id || getDeterministicUserId(email),
-            role: payload.role,
-            mobile: payload.mobile,
-            createdAt: new Date().toISOString(),
-          });
-          const loginRes = await this.login({ email, password: payload.password });
-          if (loginRes.success) return loginRes;
-          return {
-            success: false,
-            error: { message: 'Account already exists. Please login with your password.' },
-          };
-        }
-        userId = sbData.user.id;
-        registeredWithSupabase = true;
+      if (sbError || !sbData?.user) {
+        return {
+          success: false,
+          error: { message: sbError?.message || 'Registration failed. Please sign in with Google.' },
+        };
       }
-    } catch (err: unknown) {
-      console.warn('[AuthService] Supabase signUp network error:', err);
-      userId = getDeterministicUserId(email);
-    }
 
-    if (!userId) {
-      userId = getDeterministicUserId(email);
-    }
+      const userId = sbData.user.id;
+      const connectionCode = generateConnectionCode();
+      const photoUrl = payload.avatarUrl || `https://api.dicebear.com/9.x/avataaars/svg?seed=${userId}&backgroundColor=b6e3f4`;
 
-    // 3. Always save credential so user can log out and log back in with the same email & password
-    saveStoredCredential({
-      email,
-      password: payload.password,
-      userId,
-      role: payload.role,
-      mobile: payload.mobile,
-      createdAt: new Date().toISOString(),
-    });
-
-    // 4. If Supabase Auth succeeded, upsert profile row to public.profiles
-    if (registeredWithSupabase) {
       try {
         await supabase.from('profiles').upsert({
           id: userId,
           email,
           full_name: payload.name.trim(),
           preferred_name: payload.name.trim().split(' ')[0],
-          role: payload.role,
+          role: payload.role === 'elderly' ? 'patient' : payload.role,
+          connection_code: connectionCode,
+          profile_photo_url: photoUrl,
           phone: payload.mobile,
           is_ayushman_member: payload.isAyushmanMember ?? false,
           ayushman_member_id: payload.ayushmanMemberId ?? null,
-          ayushman_status:
-            payload.isAyushmanMember && payload.ayushmanMemberId ? 'verified' : 'none',
+          ayushman_status: payload.isAyushmanMember && payload.ayushmanMemberId ? 'verified' : 'none',
           has_completed_onboarding: payload.role !== 'elderly',
           accessibility: {
             fontSize: 'normal',
@@ -1163,85 +773,27 @@ class AuthService {
       }
 
       const profile = await this.syncProfileFromSupabase(userId, email);
-      if (profile && this.session) {
-        return { success: true, data: this.session };
+      if (!profile) {
+        return {
+          success: false,
+          error: { message: 'Failed to initialize profile. Please sign in with Google.' },
+        };
       }
+
+      // Link any family members created before/during signup
+      familyService.linkFamilyMembersToPatient(profile.id, email);
+
+      const session = makeSession(profile, email, payload.mobile);
+      this.session = session;
+      localStorage.setItem(SK_SESSION, JSON.stringify(session));
+      this.notifyListeners();
+      return { success: true, data: session };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: { message: err.message || 'Registration failed.' },
+      };
     }
-
-    // 5. Fallback user profile creation (works even during Supabase email rate-limit window)
-    const newProfile: UserProfile = {
-      id: userId,
-      name: payload.name.trim(),
-      preferredName: payload.name.trim().split(' ')[0],
-      role: payload.role,
-      age: payload.role === 'elderly' ? 70 : 35,
-      gender: 'other',
-      avatarUrl: payload.avatarUrl || `https://api.dicebear.com/9.x/avataaars/svg?seed=${userId}&backgroundColor=b6e3f4`,
-      primaryLanguage: 'en',
-      city: 'Guwahati',
-      state: 'Assam',
-      northeastRegion: 'Assam',
-      isAyushmanMember: payload.isAyushmanMember ?? false,
-      ayushmanMemberId: payload.ayushmanMemberId,
-      pmjayId: payload.ayushmanMemberId,
-      ayushmanStatus:
-        payload.isAyushmanMember && payload.ayushmanMemberId ? 'verified' : 'none',
-      pmjayStatus: 'none',
-      abhaStatus: 'none',
-      hasCompletedOnboarding: payload.role !== 'elderly',
-      caregiverIds: [],
-      clinicianIds: [],
-      accessibility: {
-        fontSize: 'normal',
-        highContrast: false,
-        textToSpeechAuto: false,
-        soundEffects: true,
-        speechRate: 0.85,
-      },
-      streakDays: 1,
-      totalXp: 50,
-      level: 1,
-      levelTitle: 'Naya Sathi',
-      createdAt: new Date().toISOString(),
-      email,
-      phone: payload.mobile,
-    };
-
-    if (payload.avatarUrl) {
-      saveAvatarToCache(userId, email, payload.avatarUrl);
-    }
-
-    if (newProfile.role === 'elderly' || (newProfile.role as string) === 'patient') {
-      this.patientProfile = newProfile;
-      localStorage.setItem(SK_PATIENT_PROFILE, JSON.stringify(newProfile));
-      this.currentProfile = newProfile;
-    } else if (newProfile.role === 'caregiver') {
-      this.caregiverProfile = newProfile;
-      localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(newProfile));
-      this.currentProfile = newProfile;
-    } else {
-      this.currentProfile = newProfile;
-    }
-
-    const existingIdx = this.allProfiles.findIndex(
-      (p) => p.id === userId || (p.email && p.email.toLowerCase() === email)
-    );
-    if (existingIdx >= 0) {
-      this.allProfiles[existingIdx] = newProfile;
-    } else {
-      this.allProfiles.unshift(newProfile);
-    }
-    localStorage.setItem(SK_PROFILES, JSON.stringify(this.allProfiles));
-    offlineDb.profiles.put(newProfile).catch(() => {});
-
-    // Link any family members created before/during signup
-    familyService.linkFamilyMembersToPatient(newProfile.id, email);
-
-    const session = makeSession(newProfile, email, payload.mobile);
-    this.session = session;
-    localStorage.setItem(SK_SESSION, JSON.stringify(session));
-    this.notifyListeners();
-    return { success: true, data: session };
   }
 
   /** Sign out and clear active session. Preserves credentials and profiles for re-login. */

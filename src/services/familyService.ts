@@ -23,11 +23,11 @@ class FamilyService {
       try {
         this.memories = JSON.parse(savedMems);
       } catch {
-        this.memories = MOCK_MEMORIES;
+        this.memories = [];
       }
     } else {
-      this.memories = MOCK_MEMORIES;
-      localStorage.setItem(STORAGE_KEY_MEMORIES, JSON.stringify(this.memories));
+      this.memories = [];
+      localStorage.setItem(STORAGE_KEY_MEMORIES, JSON.stringify([]));
     }
 
     // Load family members from global storage
@@ -37,7 +37,7 @@ class FamilyService {
       try {
         const parsed = JSON.parse(savedFams) as FamilyMember[];
         parsed.forEach((m) => {
-          if (m && m.userId !== 'elder-1') {
+          if (m && m.userId !== 'elder-1' && !MOCK_MEMBER_IDS.has(m.id)) {
             loadedMembers.push(m);
           }
         });
@@ -45,13 +45,6 @@ class FamilyService {
         // ignore parse error
       }
     }
-
-    // Ensure default Dadi Sathi family members (Priya, Rohit, Aarav, Ananya) are seeded if not present
-    MOCK_FAMILY_MEMBERS.forEach((mockM) => {
-      if (!loadedMembers.some((m) => m.id === mockM.id)) {
-        loadedMembers.push({ ...mockM });
-      }
-    });
 
     // Also scan dedicated per-patient keys in localStorage so no patient's family is ever lost
     try {

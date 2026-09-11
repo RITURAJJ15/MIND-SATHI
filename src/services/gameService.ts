@@ -9,105 +9,8 @@ import { syncService } from './syncService';
 
 const STORAGE_KEY_SESSIONS = 'mind_sathi_game_sessions';
 
-// Default initial sessions to populate charts if fresh start
-const DEFAULT_INITIAL_SESSIONS: GameSession[] = [
-  {
-    id: 'sess-1',
-    gameId: 'smriti_sangam',
-    userId: 'e1000000-0000-4000-a000-000000000001',
-    timestamp: '2026-08-30T09:15:00Z',
-    durationSeconds: 160,
-    score: 85,
-    accuracy: 90,
-    reactionTimeMs: 1420,
-    difficulty: 'saral',
-    completed: true,
-    xpEarned: 60,
-    mistakesCount: 1,
-    hintsUsed: 0,
-    domainScores: { memory: 88, language: 75, working_memory: 80, executive: 70, attention: 82, visuospatial: 78 },
-  },
-  {
-    id: 'sess-2',
-    gameId: 'shabda_mala',
-    userId: 'e1000000-0000-4000-a000-000000000001',
-    timestamp: '2026-08-31T11:00:00Z',
-    durationSeconds: 210,
-    score: 80,
-    accuracy: 85,
-    reactionTimeMs: 1650,
-    difficulty: 'saral',
-    completed: true,
-    xpEarned: 55,
-    mistakesCount: 2,
-    hintsUsed: 1,
-    domainScores: { memory: 85, language: 82, working_memory: 78, executive: 72, attention: 80, visuospatial: 75 },
-  },
-  {
-    id: 'sess-3',
-    gameId: 'rangoli_rekha',
-    userId: 'e1000000-0000-4000-a000-000000000001',
-    timestamp: '2026-09-01T17:30:00Z',
-    durationSeconds: 190,
-    score: 75,
-    accuracy: 80,
-    reactionTimeMs: 1300,
-    difficulty: 'saral',
-    completed: true,
-    xpEarned: 50,
-    mistakesCount: 2,
-    hintsUsed: 0,
-    domainScores: { memory: 86, language: 80, working_memory: 84, executive: 75, attention: 82, visuospatial: 80 },
-  },
-  {
-    id: 'sess-4',
-    gameId: 'bazaar_hisaab',
-    userId: 'e1000000-0000-4000-a000-000000000001',
-    timestamp: '2026-09-02T10:10:00Z',
-    durationSeconds: 240,
-    score: 70,
-    accuracy: 75,
-    reactionTimeMs: 2100,
-    difficulty: 'saral',
-    completed: true,
-    xpEarned: 50,
-    mistakesCount: 3,
-    hintsUsed: 1,
-    domainScores: { memory: 85, language: 81, working_memory: 82, executive: 74, attention: 79, visuospatial: 78 },
-  },
-  {
-    id: 'sess-5',
-    gameId: 'dhyan_kendra',
-    userId: 'e1000000-0000-4000-a000-000000000001',
-    timestamp: '2026-09-03T15:45:00Z',
-    durationSeconds: 150,
-    score: 90,
-    accuracy: 92,
-    reactionTimeMs: 980,
-    difficulty: 'madhyam',
-    completed: true,
-    xpEarned: 75,
-    mistakesCount: 1,
-    hintsUsed: 0,
-    domainScores: { memory: 86, language: 82, working_memory: 83, executive: 76, attention: 89, visuospatial: 82 },
-  },
-  {
-    id: 'sess-6',
-    gameId: 'smriti_sangam',
-    userId: 'e1000000-0000-4000-a000-000000000001',
-    timestamp: '2026-09-04T08:30:00Z',
-    durationSeconds: 140,
-    score: 95,
-    accuracy: 94,
-    reactionTimeMs: 1100,
-    difficulty: 'madhyam',
-    completed: true,
-    xpEarned: 80,
-    mistakesCount: 1,
-    hintsUsed: 0,
-    domainScores: { memory: 91, language: 83, working_memory: 86, executive: 77, attention: 88, visuospatial: 84 },
-  },
-];
+// Default initial sessions is empty for genuine user gameplay telemetry
+const DEFAULT_INITIAL_SESSIONS: GameSession[] = [];
 
 class GameService {
   private sessions: GameSession[];
@@ -116,13 +19,14 @@ class GameService {
     const saved = localStorage.getItem(STORAGE_KEY_SESSIONS);
     if (saved) {
       try {
-        this.sessions = JSON.parse(saved);
+        const parsed = JSON.parse(saved) as GameSession[];
+        this.sessions = parsed.filter((s) => s.userId !== 'e1000000-0000-4000-a000-000000000001' && !s.id.startsWith('sess-'));
       } catch {
-        this.sessions = DEFAULT_INITIAL_SESSIONS;
+        this.sessions = [];
       }
     } else {
-      this.sessions = DEFAULT_INITIAL_SESSIONS;
-      localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify(this.sessions));
+      this.sessions = [];
+      localStorage.setItem(STORAGE_KEY_SESSIONS, JSON.stringify([]));
     }
 
     // Load Dexie stored sessions to ensure complete offline persistence
