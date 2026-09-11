@@ -56,6 +56,17 @@ export const CaregiverPortalPage: React.FC = () => {
   const [loadingCaregiverInfo, setLoadingCaregiverInfo] = useState(false);
   const [authError, setAuthError] = useState('');
 
+  // Caregiver Authentication states (email/password & Google)
+  const [caregiverAuthMode, setCaregiverAuthMode] = useState<'google' | 'login' | 'register'>('google');
+  const [cgName, setCgName] = useState('');
+  const [cgEmail, setCgEmail] = useState('');
+  const [cgPassword, setCgPassword] = useState('');
+  const [cgConfirmPassword, setCgConfirmPassword] = useState('');
+  const [cgPhone, setCgPhone] = useState('');
+  const [cgShowPassword, setCgShowPassword] = useState(false);
+  const [cgLoading, setCgLoading] = useState(false);
+  const [cgSuccessMsg, setCgSuccessMsg] = useState('');
+
   // Patient linking state (Connection Code or Verified Email)
   const [assignedPatients, setAssignedPatients] = useState<any[]>([]);
   const [selectedPatient, setSelectedPatient] = useState<any>(null);
@@ -147,6 +158,73 @@ export const CaregiverPortalPage: React.FC = () => {
       console.warn('Error fetching AI caregiver insight:', err);
     } finally {
       setIsGeneratingAi(false);
+    }
+  };
+
+  const handleCaregiverEmailLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    setCgSuccessMsg('');
+
+    if (!cgEmail.trim() || !cgPassword) {
+      setAuthError('Please enter your email and password.');
+      return;
+    }
+
+    setCgLoading(true);
+    try {
+      const res = await authService.loginCaregiverWithEmailPassword(cgEmail.trim(), cgPassword);
+      if (res.success) {
+        setCgSuccessMsg('Caregiver sign-in successful! Opening Caregiver Portal...');
+      } else {
+        setAuthError(res.error?.message || 'Caregiver sign-in failed. Please check your credentials.');
+      }
+    } catch (err: any) {
+      setAuthError(err.message || 'An unexpected error occurred during sign in.');
+    } finally {
+      setCgLoading(false);
+    }
+  };
+
+  const handleCaregiverEmailRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError('');
+    setCgSuccessMsg('');
+
+    if (!cgName.trim()) {
+      setAuthError('Please enter your full name.');
+      return;
+    }
+    if (!cgEmail.trim()) {
+      setAuthError('Please enter your Google email address (@gmail.com).');
+      return;
+    }
+    if (cgPassword.length < 6) {
+      setAuthError('Password must be at least 6 characters.');
+      return;
+    }
+    if (cgPassword !== cgConfirmPassword) {
+      setAuthError('Passwords do not match. Please verify your password.');
+      return;
+    }
+
+    setCgLoading(true);
+    try {
+      const res = await authService.registerCaregiverWithEmailPassword({
+        name: cgName.trim(),
+        email: cgEmail.trim(),
+        password: cgPassword,
+        phone: cgPhone.trim() || undefined,
+      });
+      if (res.success) {
+        setCgSuccessMsg('Caregiver account created successfully! Opening Caregiver Portal...');
+      } else {
+        setAuthError(res.error?.message || 'Caregiver registration failed.');
+      }
+    } catch (err: any) {
+      setAuthError(err.message || 'An unexpected error occurred during registration.');
+    } finally {
+      setCgLoading(false);
     }
   };
 
@@ -336,38 +414,262 @@ export const CaregiverPortalPage: React.FC = () => {
           </div>
         )}
 
-        <div className="bg-white p-8 rounded-3xl shadow-elder border border-emerald-200 text-center">
+        <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-elder border border-emerald-200 text-center">
           <div className="w-16 h-16 bg-emerald-100 text-emerald-800 rounded-3xl flex items-center justify-center mx-auto mb-4 border border-emerald-300 shadow-sm">
-            <UserCheck className="w-8 h-8" />
+            <UserCheck className="w-8 h-8 text-emerald-700" />
           </div>
 
           <h2 className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tight">
             {currentLang === 'hi' ? 'देखभालकर्ता पोर्टल (Caregiver Portal)' : 'Caregiver Oversight & Safety Hub'}
           </h2>
-          <p className="text-sm text-gray-600 mt-2 mb-6 leading-relaxed">
+          <p className="text-sm text-gray-600 mt-2 mb-6 leading-relaxed max-w-lg mx-auto">
             {isElderlyPatient
-              ? 'Are you this patient’s family caregiver? Sign in with your caregiver account or register a new one below to connect.'
+              ? 'Are you this patient’s family caregiver? Sign in with your separate Caregiver Google account or Caregiver email & password below to connect.'
               : 'To safeguard senior cognitive health records and view real telemetry, please sign in with your verified Caregiver credentials or create a new Caregiver account.'}
           </p>
 
           {authError && (
-            <div className="p-3.5 mb-5 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold rounded-xl flex items-center gap-2 text-left">
+            <div className="max-w-md mx-auto p-3.5 mb-5 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold rounded-xl flex items-center gap-2 text-left">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
               <span>{authError}</span>
             </div>
           )}
 
-          <div className="max-w-md mx-auto space-y-4">
-            <GoogleSignInButton
-              intendedRole="caregiver"
-              label="Continue with Google as Caregiver"
-              className="py-4 shadow-sm hover:shadow-md border-emerald-200 hover:bg-emerald-50/50"
-              onError={(err) => setAuthError(err)}
-            />
+          {cgSuccessMsg && (
+            <div className="max-w-md mx-auto p-3.5 mb-5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold rounded-xl flex items-center gap-2 text-left">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+              <span>{cgSuccessMsg}</span>
+            </div>
+          )}
 
-            <div className="flex items-center justify-center gap-2 text-xs text-gray-500 font-medium bg-emerald-50/50 p-3 rounded-xl border border-emerald-100">
+          {/* Tab Selector */}
+          <div className="max-w-md mx-auto grid grid-cols-3 p-1.5 bg-gray-100 rounded-2xl mb-6 text-xs font-black">
+            <button
+              type="button"
+              onClick={() => {
+                setCaregiverAuthMode('google');
+                setAuthError('');
+                setCgSuccessMsg('');
+              }}
+              className={`py-2 px-1 rounded-xl transition-all cursor-pointer truncate ${
+                caregiverAuthMode === 'google'
+                  ? 'bg-white text-emerald-900 shadow-xs'
+                  : 'text-gray-500 hover:text-gray-900'
+              }`}
+            >
+              Google
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setCaregiverAuthMode('login');
+                setAuthError('');
+                setCgSuccessMsg('');
+              }}
+              className={`py-2 px-1 rounded-xl transition-all cursor-pointer truncate ${
+                caregiverAuthMode === 'login'
+                  ? 'bg-white text-emerald-900 shadow-xs'
+                  : 'text-gray-500 hover:text-gray-900'
+              }`}
+            >
+              Email Login
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setCaregiverAuthMode('register');
+                setAuthError('');
+                setCgSuccessMsg('');
+              }}
+              className={`py-2 px-1 rounded-xl transition-all cursor-pointer truncate ${
+                caregiverAuthMode === 'register'
+                  ? 'bg-white text-emerald-900 shadow-xs'
+                  : 'text-gray-500 hover:text-gray-900'
+              }`}
+            >
+              Create Account
+            </button>
+          </div>
+
+          <div className="max-w-md mx-auto">
+            {/* OPTION 1: GOOGLE OAUTH */}
+            {caregiverAuthMode === 'google' && (
+              <div className="space-y-4">
+                <GoogleSignInButton
+                  intendedRole="caregiver"
+                  label="Continue with Google as Caregiver"
+                  className="py-4 shadow-sm hover:shadow-md border-emerald-200 hover:bg-emerald-50/50"
+                  onError={(err) => setAuthError(err)}
+                />
+                <p className="text-[11px] text-gray-500 leading-relaxed text-left bg-emerald-50/50 p-3 rounded-xl border border-emerald-100">
+                  <ShieldCheck className="w-4 h-4 text-emerald-600 inline mr-1 align-text-bottom" />
+                  <strong>Strict Role Separation:</strong> A Caregiver must use a separate Google account from the Patient. Google profiles are automatically created and stored in the database.
+                </p>
+              </div>
+            )}
+
+            {/* OPTION 2: CAREGIVER EMAIL SIGN IN */}
+            {caregiverAuthMode === 'login' && (
+              <form onSubmit={handleCaregiverEmailLogin} className="space-y-4 text-left">
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                    Caregiver Email ID
+                  </label>
+                  <div className="relative">
+                    <Mail className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                    <input
+                      type="email"
+                      required
+                      value={cgEmail}
+                      onChange={(e) => setCgEmail(e.target.value)}
+                      placeholder="caregiver@gmail.com"
+                      className="w-full bg-gray-50 border border-gray-200 rounded-xl pl-10 pr-4 py-2.5 text-sm font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                    Password
+                  </label>
+                  <div className="relative">
+                    <Lock className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                    <input
+                      type={cgShowPassword ? 'text' : 'password'}
+                      required
+                      value={cgPassword}
+                      onChange={(e) => setCgPassword(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full bg-gray-50 border border-gray-200 rounded-xl pl-10 pr-10 py-2.5 text-sm font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setCgShowPassword(!cgShowPassword)}
+                      className="absolute right-3 top-3 text-gray-400 hover:text-gray-600 cursor-pointer"
+                    >
+                      {cgShowPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={cgLoading}
+                  className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-extrabold text-sm rounded-xl shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 mt-2"
+                >
+                  {cgLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
+                  <span>Sign In as Caregiver</span>
+                </button>
+              </form>
+            )}
+
+            {/* OPTION 3: CREATE CAREGIVER ACCOUNT */}
+            {caregiverAuthMode === 'register' && (
+              <form onSubmit={handleCaregiverEmailRegister} className="space-y-3.5 text-left">
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+                    Caregiver Full Name
+                  </label>
+                  <div className="relative">
+                    <User className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                    <input
+                      type="text"
+                      required
+                      value={cgName}
+                      onChange={(e) => setCgName(e.target.value)}
+                      placeholder="e.g. Ramesh Sharma"
+                      className="w-full bg-gray-50 border border-gray-200 rounded-xl pl-10 pr-4 py-2.5 text-sm font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+                    Caregiver Email ID
+                  </label>
+                  <div className="relative">
+                    <Mail className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                    <input
+                      type="email"
+                      required
+                      value={cgEmail}
+                      onChange={(e) => setCgEmail(e.target.value)}
+                      placeholder="caregiver@gmail.com"
+                      className="w-full bg-gray-50 border border-gray-200 rounded-xl pl-10 pr-4 py-2.5 text-sm font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                    />
+                  </div>
+                  <p className="text-[11px] text-emerald-800 font-semibold mt-1 flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Must be a genuine Google email (@gmail.com) & separate from patient.</span>
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+                    Phone / Mobile (Optional)
+                  </label>
+                  <div className="relative">
+                    <Phone className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                    <input
+                      type="tel"
+                      value={cgPhone}
+                      onChange={(e) => setCgPhone(e.target.value)}
+                      placeholder="+91 98765 43210"
+                      className="w-full bg-gray-50 border border-gray-200 rounded-xl pl-10 pr-4 py-2.5 text-sm font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+                      Password
+                    </label>
+                    <div className="relative">
+                      <Lock className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                      <input
+                        type={cgShowPassword ? 'text' : 'password'}
+                        required
+                        value={cgPassword}
+                        onChange={(e) => setCgPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl pl-10 pr-3 py-2.5 text-sm font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-gray-700 uppercase tracking-wider mb-1">
+                      Confirm Password
+                    </label>
+                    <div className="relative">
+                      <Lock className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                      <input
+                        type={cgShowPassword ? 'text' : 'password'}
+                        required
+                        value={cgConfirmPassword}
+                        onChange={(e) => setCgConfirmPassword(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full bg-gray-50 border border-gray-200 rounded-xl pl-10 pr-3 py-2.5 text-sm font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={cgLoading}
+                  className="w-full py-3.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-extrabold text-sm rounded-xl shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 mt-3"
+                >
+                  {cgLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <UserCheck className="w-4 h-4" />}
+                  <span>Create Caregiver Account</span>
+                </button>
+              </form>
+            )}
+
+            <div className="flex items-center justify-center gap-2 text-xs text-gray-500 font-medium bg-emerald-50/50 p-3 rounded-xl border border-emerald-100 mt-5">
               <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>Real Google Authentication • Data permanently stored in Supabase</span>
+              <span>Real Authentication • Data permanently stored in Supabase</span>
             </div>
           </div>
         </div>

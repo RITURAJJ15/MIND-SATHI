@@ -281,8 +281,7 @@ class AuthService {
       this.allProfiles = [];
     }
 
-    // Purge any legacy fake profiles or credentials from localStorage
-    localStorage.removeItem(SK_CREDENTIALS);
+    // Sanitize cached profiles
     this.allProfiles = this.allProfiles.filter(isRealProfile);
     localStorage.setItem(SK_PROFILES, JSON.stringify(this.allProfiles));
 
@@ -391,8 +390,10 @@ class AuthService {
   public async signInWithGoogle(intendedRole?: UserRole): Promise<{ success: boolean; error?: string }> {
     try {
       if (intendedRole) {
+        localStorage.setItem('ms_pending_oauth_role', intendedRole);
         sessionStorage.setItem('ms_pending_oauth_role', intendedRole);
       } else {
+        localStorage.removeItem('ms_pending_oauth_role');
         sessionStorage.removeItem('ms_pending_oauth_role');
       }
 
@@ -521,13 +522,18 @@ class AuthService {
       this.needsRoleSelection = false;
       this.pendingGoogleUser = null;
       sessionStorage.removeItem('ms_pending_oauth_role');
+      localStorage.removeItem('ms_pending_oauth_role');
 
       if (role === 'elderly' || (role as string) === 'patient') {
         this.patientProfile = newProfile;
+        this.caregiverProfile = null;
+        localStorage.removeItem(SK_CAREGIVER_PROFILE);
         localStorage.setItem(SK_PATIENT_PROFILE, JSON.stringify(newProfile));
         this.currentProfile = newProfile;
       } else if (role === 'caregiver') {
         this.caregiverProfile = newProfile;
+        this.patientProfile = null;
+        localStorage.removeItem(SK_PATIENT_PROFILE);
         localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(newProfile));
         this.currentProfile = newProfile;
       } else {
@@ -594,9 +600,15 @@ class AuthService {
           supabase.from('profiles').update({ profile_photo_url: mapped.avatarUrl }).eq('id', userId).then(() => {});
         }
 
-        const pendingOauthRole = sessionStorage.getItem('ms_pending_oauth_role') as UserRole;
+        const pendingOauthRole = (
+          localStorage.getItem('ms_pending_oauth_role') ||
+          sessionStorage.getItem('ms_pending_oauth_role')
+        ) as UserRole | null;
+
         if (pendingOauthRole) {
+          localStorage.removeItem('ms_pending_oauth_role');
           sessionStorage.removeItem('ms_pending_oauth_role');
+
           if (pendingOauthRole === 'caregiver' && (mapped.role === 'elderly' || (mapped.role as string) === 'patient')) {
             await supabase.auth.signOut();
             this.session = null;
@@ -604,6 +616,7 @@ class AuthService {
             localStorage.removeItem(SK_SESSION);
             this.notifyListeners();
             alert(`This Google account (${email}) is already registered as a Patient. A Caregiver must use a separate Google account with a different email address.`);
+            window.location.href = window.location.origin;
             return null;
           }
           if (pendingOauthRole === 'elderly' && mapped.role === 'caregiver') {
@@ -613,6 +626,7 @@ class AuthService {
             localStorage.removeItem(SK_SESSION);
             this.notifyListeners();
             alert(`This Google account (${email}) is registered as a Caregiver. Please use the Caregiver Portal to sign in.`);
+            window.location.href = window.location.origin;
             return null;
           }
         }
@@ -620,19 +634,21 @@ class AuthService {
         this.needsRoleSelection = false;
         this.pendingGoogleUser = null;
         sessionStorage.removeItem('ms_pending_oauth_role');
-
-        if (mapped.role === 'elderly' || (mapped.role as string) === 'patient') {
-          this.patientProfile = mapped;
-          localStorage.setItem(SK_PATIENT_PROFILE, JSON.stringify(mapped));
-        } else if (mapped.role === 'caregiver') {
-          this.caregiverProfile = mapped;
-          localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(mapped));
-        }
+        localStorage.removeItem('ms_pending_oauth_role');
 
         if (mapped.role === 'caregiver') {
+          mapped.hasCompletedOnboarding = true;
+          this.caregiverProfile = mapped;
           this.currentProfile = mapped;
-        } else if (mapped.role === 'elderly') {
+          this.patientProfile = null;
+          localStorage.removeItem(SK_PATIENT_PROFILE);
+          localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(mapped));
+        } else if (mapped.role === 'elderly' || (mapped.role as string) === 'patient') {
+          this.patientProfile = mapped;
           this.currentProfile = mapped;
+          this.caregiverProfile = null;
+          localStorage.removeItem(SK_CAREGIVER_PROFILE);
+          localStorage.setItem(SK_PATIENT_PROFILE, JSON.stringify(mapped));
         } else {
           this.currentProfile = mapped;
         }
@@ -656,49 +672,61 @@ class AuthService {
       // Profile row doesn't exist in DB yet — check if user designated a role prior to OAuth
       const authUser = (await supabase.auth.getUser()).data?.user;
       const metadata = authUser?.user_metadata || {};
-      const pendingRole = (sessionStorage.getItem('ms_pending_oauth_role') as UserRole) || (metadata.role as UserRole);
+      const pendingOauthRole = (
+        localStorage.getItem('ms_pending_oauth_role') ||
+        sessionStorage.getItem('ms_pending_oauth_role')
+      ) as UserRole | null;
+      const pendingRole = pendingOauthRole || (metadata.role as UserRole);
+
+      // Check role collision with ANY existing profile in Supabase matching this email:
+      const normalizedEmail = (email || '').trim().toLowerCase();
+      if (normalizedEmail) {
+        const { data: existingEmailProfile } = await supabase
+          .from('profiles')
+          .select('id, role')
+          .ilike('email', normalizedEmail)
+          .maybeSingle();
+
+        if (existingEmailProfile) {
+          if (pendingRole === 'caregiver' && (existingEmailProfile.role === 'elderly' || (existingEmailProfile.role as string) === 'patient')) {
+            localStorage.removeItem('ms_pending_oauth_role');
+            sessionStorage.removeItem('ms_pending_oauth_role');
+            await supabase.auth.signOut();
+            this.session = null;
+            this.currentProfile = null;
+            localStorage.removeItem(SK_SESSION);
+            this.notifyListeners();
+            alert(`This Google account (${normalizedEmail}) is already registered as a Patient. A Caregiver must use a separate Google account with a different email address.`);
+            window.location.href = window.location.origin;
+            return null;
+          }
+          if (pendingRole === 'elderly' && existingEmailProfile.role === 'caregiver') {
+            localStorage.removeItem('ms_pending_oauth_role');
+            sessionStorage.removeItem('ms_pending_oauth_role');
+            await supabase.auth.signOut();
+            this.session = null;
+            this.currentProfile = null;
+            localStorage.removeItem(SK_SESSION);
+            this.notifyListeners();
+            alert(`This Google account (${normalizedEmail}) is registered as a Caregiver. Please use the Caregiver Portal to sign in.`);
+            window.location.href = window.location.origin;
+            return null;
+          }
+        }
+      }
 
       if (pendingRole) {
+        localStorage.removeItem('ms_pending_oauth_role');
         sessionStorage.removeItem('ms_pending_oauth_role');
         return await this.completeGoogleProfile(pendingRole);
       }
 
-      // New Google User: Prompt for role selection
-      this.pendingGoogleUser = authUser || { id: userId, email, user_metadata: metadata };
+      // New Google User without preselected role: Prompt for role selection
+      this.pendingGoogleUser = authUser || { id: userId, email: normalizedEmail, user_metadata: metadata };
       this.needsRoleSelection = true;
-
-      const tempProfile: UserProfile = {
-        id: userId,
-        name: (metadata.full_name as string) || (metadata.name as string) || email.split('@')[0] || 'MIND SATHI User',
-        preferredName: ((metadata.full_name as string) || (metadata.name as string) || email.split('@')[0])?.split(' ')[0] || 'Sathi',
-        role: 'elderly',
-        age: 70,
-        gender: 'other',
-        avatarUrl: (metadata.avatar_url as string) || (metadata.picture as string) || `https://api.dicebear.com/9.x/avataaars/svg?seed=${userId}&backgroundColor=b6e3f4`,
-        primaryLanguage: 'en',
-        city: 'Guwahati',
-        state: 'Assam',
-        northeastRegion: 'Assam',
-        isAyushmanMember: false,
-        ayushmanStatus: 'none',
-        pmjayStatus: 'none',
-        abhaStatus: 'none',
-        hasCompletedOnboarding: false,
-        caregiverIds: [],
-        clinicianIds: [],
-        accessibility: { fontSize: 'normal', highContrast: false, textToSpeechAuto: false, soundEffects: true, speechRate: 0.85 },
-        streakDays: 1,
-        totalXp: 50,
-        level: 1,
-        levelTitle: 'Naya Sathi',
-        createdAt: new Date().toISOString(),
-        email,
-      };
-
-      this.currentProfile = tempProfile;
-      this.session = makeSession(tempProfile, email);
+      this.currentProfile = null;
       this.notifyListeners();
-      return tempProfile;
+      return null;
     } catch (err) {
       console.error('[AuthService] Error in syncProfileFromSupabase:', err);
     }
@@ -894,7 +922,8 @@ class AuthService {
       this.caregiverProfile = activeCaregiverProfile;
       this.currentProfile = activeCaregiverProfile;
       this.needsRoleSelection = false;
-      this.pendingGoogleUser = null;
+      this.patientProfile = null;
+      localStorage.removeItem(SK_PATIENT_PROFILE);
       localStorage.setItem(SK_SESSION, JSON.stringify(this.session));
       localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(activeCaregiverProfile));
       this.notifyListeners();
@@ -1073,6 +1102,8 @@ class AuthService {
         this.allProfiles.unshift(caregiverProfile);
       }
 
+      this.patientProfile = null;
+      localStorage.removeItem(SK_PATIENT_PROFILE);
       localStorage.setItem(SK_SESSION, JSON.stringify(session));
       localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(caregiverProfile));
       localStorage.setItem(SK_PROFILES, JSON.stringify(this.allProfiles));
@@ -1206,6 +1237,7 @@ class AuthService {
     this.needsRoleSelection = false;
     this.pendingGoogleUser = null;
     sessionStorage.removeItem('ms_pending_oauth_role');
+    localStorage.removeItem('ms_pending_oauth_role');
     localStorage.removeItem(SK_SESSION);
     localStorage.removeItem(SK_PATIENT_PROFILE);
     localStorage.removeItem(SK_CAREGIVER_PROFILE);
@@ -1360,9 +1392,27 @@ class AuthService {
    * For Home Page and all other screens, returns the Patient profile.
    */
   public getCurrentUser(contextTab?: string): UserProfile | null {
+    // 1. If active authenticated session is for a caregiver, strictly return the caregiver profile!
+    if (this.session?.user?.role === 'caregiver') {
+      if (this.currentProfile && this.currentProfile.role === 'caregiver') {
+        return this.currentProfile;
+      }
+      const cg = this.getCaregiverProfile();
+      if (cg) {
+        this.currentProfile = cg;
+        return cg;
+      }
+      const inAll = this.allProfiles.find((p) => p.id === this.session!.user.id || p.role === 'caregiver');
+      if (inAll) {
+        this.currentProfile = inAll;
+        return inAll;
+      }
+    }
+
     if (this.currentProfile?.role === 'caregiver') {
       return this.currentProfile;
     }
+
     if (contextTab === 'caregiver') {
       const cg = this.getCaregiverProfile();
       if (cg) return cg;
@@ -1371,9 +1421,11 @@ class AuthService {
       }
       return null;
     } else {
-      // Home page, games, daily-plan, progress, etc.
-      const pt = this.getPatientProfile();
-      if (pt) return pt;
+      // Home page, games, daily-plan, progress, etc. (only if NOT caregiver session)
+      if (this.session?.user?.role !== 'caregiver') {
+        const pt = this.getPatientProfile();
+        if (pt) return pt;
+      }
     }
 
     if (this.currentProfile) return this.currentProfile;

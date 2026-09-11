@@ -34,12 +34,14 @@ export function useCurrentUser(contextTab?: string) {
 
   const switchProfile = (userId: string) => authService.switchUser(userId);
 
+  const isCaregiverSession = session?.user?.role === 'caregiver' || currentUser?.role === 'caregiver';
+
   // Safe fallback so components that assume non-null don't throw
   const safeUser: UserProfile = currentUser ?? {
     id: 'guest',
     name: 'Guest',
     preferredName: 'Guest',
-    role: 'elderly',
+    role: isCaregiverSession ? 'caregiver' : 'elderly',
     age: 0,
     gender: 'other',
     avatarUrl: '',
@@ -52,7 +54,8 @@ export function useCurrentUser(contextTab?: string) {
     streakDays: 0,
     totalXp: 0,
     level: 1,
-    levelTitle: 'Naya Sathi',
+    levelTitle: isCaregiverSession ? 'Caregiver' : 'Naya Sathi',
+    hasCompletedOnboarding: isCaregiverSession ? true : false,
     createdAt: new Date().toISOString(),
   };
 
@@ -70,8 +73,8 @@ export function useCurrentUser(contextTab?: string) {
     needsRoleSelection,
     completeGoogleProfile,
     signInWithGoogle,
-    isElderly:   safeUser.role === 'elderly',
-    isCaregiver: safeUser.role === 'caregiver',
+    isElderly:   !isCaregiverSession && safeUser.role === 'elderly',
+    isCaregiver: isCaregiverSession || safeUser.role === 'caregiver',
     isClinician: safeUser.role === 'clinician',
     isAdmin:     safeUser.role === 'admin',
   };

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { MainLayout } from './layouts/MainLayout';
 import { AuthLayout } from './layouts/AuthLayout';
 import { LandingPage } from './pages/LandingPage';
@@ -43,7 +43,9 @@ export const App: React.FC = () => {
     isAuthenticated,
     isLoading,
     currentUser,
+    session,
     isElderly,
+    isCaregiver,
     needsRoleSelection,
     completeGoogleProfile,
   } = useCurrentUser(activeTab);
@@ -52,6 +54,12 @@ export const App: React.FC = () => {
   const [pendingRole, setPendingRole] = useState<AuthRole | null>(null);
   const [activeGameId, setActiveGameId]       = useState<GameId>('smriti_sangam');
   const [activeDifficulty, setActiveDifficulty] = useState<DifficultyTier>('saral');
+
+  useEffect(() => {
+    if ((currentUser?.role === 'caregiver' || session?.user?.role === 'caregiver' || isCaregiver) && activeTab !== 'caregiver') {
+      setActiveTab('caregiver');
+    }
+  }, [currentUser?.role, session?.user?.role, isCaregiver, activeTab]);
 
   const handleNavigate = (tab: string, extraId?: string) => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -190,7 +198,15 @@ export const App: React.FC = () => {
   }
 
   // ── Patient Onboarding (authenticated elderly, no onboarding yet) ──────────
-  if (isElderly && currentUser && !currentUser.hasCompletedOnboarding) {
+  // STRICT: Patient Onboarding is strictly for elderly seniors. Caregivers must NEVER be routed here!
+  if (
+    !isCaregiver &&
+    session?.user?.role !== 'caregiver' &&
+    currentUser?.role !== 'caregiver' &&
+    isElderly &&
+    currentUser &&
+    !currentUser.hasCompletedOnboarding
+  ) {
     return (
       <AuthLayout>
         <PatientOnboardingPage
@@ -206,7 +222,7 @@ export const App: React.FC = () => {
   }
 
   // ── Dedicated Caregiver Portal View (Strictly patient oversight & records) ──
-  if (currentUser?.role === 'caregiver') {
+  if (currentUser?.role === 'caregiver' || session?.user?.role === 'caregiver' || isCaregiver) {
     return (
       <div className="min-h-screen flex flex-col bg-[#F8FAFC]">
         {/* Caregiver Dedicated Header */}
