@@ -1,15 +1,59 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useCurrentUser } from '../hooks/useCurrentUser';
 import { useLanguage } from '../hooks/useLanguage';
 import { useAccessibility } from '../hooks/useAccessibility';
 import { LanguageSwitcher } from '../components/common/LanguageSwitcher';
 import { FontScaler } from '../components/common/FontScaler';
-import { Settings, Eye, Volume2, ShieldCheck, User, RefreshCcw } from 'lucide-react';
+import { Settings, Eye, Volume2, ShieldCheck, User, RefreshCcw, MapPin, Loader2, CheckCircle2 } from 'lucide-react';
+import { locationService } from '../services/locationService';
+import { PatientLocation } from '../types/location';
+import { HomeLocationModal } from '../components/location/HomeLocationModal';
 
 export const ProfileSettingsPage: React.FC = () => {
   const { currentUser } = useCurrentUser();
   const { currentLang, t } = useLanguage();
   const { settings, setFontSize, toggleHighContrast, toggleSound } = useAccessibility();
+
+  // Home location state
+  const [homeLocation, setHomeLocation] = useState<PatientLocation | null>(null);
+  const [loadingLocation, setLoadingLocation] = useState<boolean>(true);
+  const [updatingLocation, setUpdatingLocation] = useState<boolean>(false);
+  const [showLocationModal, setShowLocationModal] = useState<boolean>(false);
+  const [locationToast, setLocationToast] = useState<string>('');
+
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    setLoadingLocation(true);
+    locationService
+      .getPatientHomeLocation(currentUser.id)
+      .then((loc) => setHomeLocation(loc))
+      .catch((err) => console.warn('Error fetching location in settings:', err))
+      .finally(() => setLoadingLocation(false));
+  }, [currentUser?.id]);
+
+  const handleUpdateLocation = async () => {
+    if (!currentUser?.id) return;
+    setUpdatingLocation(true);
+    try {
+      const coords = await locationService.requestBrowserCoordinates();
+      const res = await locationService.savePatientHomeLocation(currentUser.id, coords);
+      if (res.success && res.data) {
+        setHomeLocation(res.data);
+        setLocationToast('Home location saved successfully.');
+        setTimeout(() => setLocationToast(''), 4000);
+      } else {
+        alert(res.error || 'Failed to update location.');
+      }
+    } catch (err: any) {
+      console.warn('Location update error:', err);
+      alert(
+        err?.message ||
+          'Unable to get location. Please enable location permissions in your browser and try again.'
+      );
+    } finally {
+      setUpdatingLocation(false);
+    }
+  };
 
   return (
     <div className="space-y-6 animate-fade-in max-w-3xl mx-auto">
@@ -129,6 +173,110 @@ export const ProfileSettingsPage: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Patient Home Location Management */}
+      <div className="bg-white p-6 rounded-3xl shadow-elder border border-gray-200 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-xl font-extrabold text-gray-900 flex items-center gap-2">
+            <MapPin className="w-5 h-5 text-red-500" />
+            <span>Home Location & Senior Safety Anchor</span>
+          </h3>
+          {homeLocation && (
+            <span className="text-xs font-black px-2.5 py-1 bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-full flex items-center gap-1">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+              <span>Saved</span>
+            </span>
+          )}
+        </div>
+
+        <p className="text-xs text-gray-500">
+          Your home location is permanently associated with your authenticated Google Account in Supabase. It provides orientation during disorientation episodes and alerts designated caregivers.
+        </p>
+
+        {locationToast && (
+          <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs font-bold text-emerald-800 flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{locationToast}</span>
+          </div>
+        )}
+
+        <div className="p-4 rounded-2xl bg-gray-50 border border-gray-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <div className="text-sm font-extrabold text-gray-900 flex items-center gap-1.5">
+              <span>🏠</span>
+              <span>
+                {loadingLocation
+                  ? 'Checking location...'
+                  : homeLocation
+                  ? homeLocation.locationName || homeLocation.locality || homeLocation.city || 'Home Coordinates Registered'
+                  : 'No Home Location Set'}
+              </span>
+            </div>
+            <div className="text-xs text-gray-500 mt-0.5">
+              {homeLocation
+                ? `Coordinates: ${homeLocation.latitude.toFixed(5)}° N, ${homeLocation.longitude.toFixed(5)}° E`
+                : 'Click below to register your device coordinates as your home anchor.'}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+            {homeLocation ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setShowLocationModal(true)}
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-tactile transition-all cursor-pointer flex items-center gap-1.5 active:translate-y-0.5"
+                >
+                  <span>🗺️ View on Map</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleUpdateLocation}
+                  disabled={updatingLocation}
+                  className="px-3.5 py-2 rounded-xl bg-white hover:bg-gray-100 text-gray-700 font-bold text-xs border border-gray-300 shadow-xs transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {updatingLocation ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : 'Update Location'}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={handleUpdateLocation}
+                disabled={updatingLocation}
+                className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-tactile transition-all cursor-pointer flex items-center gap-2 active:translate-y-0.5 disabled:opacity-50"
+              >
+                {updatingLocation ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
+                    <span>Detecting Location...</span>
+                  </>
+                ) : (
+                  <>
+                    <MapPin className="w-3.5 h-3.5" />
+                    <span>Set My Home Location</span>
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* OpenStreetMap Modal */}
+      {showLocationModal && homeLocation && (
+        <HomeLocationModal
+          isOpen={showLocationModal}
+          location={homeLocation}
+          patientId={currentUser?.id}
+          patientName={currentUser?.name}
+          onClose={() => setShowLocationModal(false)}
+          onLocationUpdated={(updated) => {
+            setHomeLocation(updated);
+            setLocationToast('Home location updated successfully.');
+            setTimeout(() => setLocationToast(''), 4000);
+          }}
+        />
+      )}
     </div>
   );
 };

@@ -22,6 +22,9 @@ import {
 import { authService } from '../../services/authService';
 import { familyService } from '../../services/familyService';
 import { storageService } from '../../services/storageService';
+import { locationService } from '../../services/locationService';
+import { PatientLocation } from '../../types/location';
+import { HomeLocationModal } from '../../components/location/HomeLocationModal';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useLanguage } from '../../hooks/useLanguage';
 import { SupportedLanguage } from '../../types/user';
@@ -86,6 +89,51 @@ export const PatientOnboardingPage: React.FC<PatientOnboardingPageProps> = ({ on
   const [emergencyName, setEmergencyName] = useState('Priyobrata Borah');
   const [emergencyPhone, setEmergencyPhone] = useState('+91 94350 12890');
   const [emergencyRel, setEmergencyRel] = useState('Son');
+
+  // Step 1: Home Location State
+  const [homeLocation, setHomeLocation] = useState<PatientLocation | null>(null);
+  const [locationLoading, setLocationLoading] = useState<boolean>(false);
+  const [locationSuccessMsg, setLocationSuccessMsg] = useState<string>('');
+  const [locationErrorMsg, setLocationErrorMsg] = useState<string>('');
+  const [showLocationMap, setShowLocationMap] = useState<boolean>(false);
+
+  // Load existing home location from Supabase if available
+  React.useEffect(() => {
+    if (currentUser?.id) {
+      locationService.getPatientHomeLocation(currentUser.id).then((loc) => {
+        if (loc) setHomeLocation(loc);
+      });
+    }
+  }, [currentUser?.id]);
+
+  const handleSetHomeLocation = async () => {
+    if (!currentUser?.id) return;
+    setLocationLoading(true);
+    setLocationErrorMsg('');
+    setLocationSuccessMsg('');
+    try {
+      const coords = await locationService.requestBrowserCoordinates();
+      const res = await locationService.savePatientHomeLocation(currentUser.id, coords);
+      if (res.success && res.data) {
+        setHomeLocation(res.data);
+        setLocationSuccessMsg('Home location saved successfully.');
+        const resolvedName = res.data.locationName || res.data.locality || res.data.city;
+        if (resolvedName && (!city || city === 'Guwahati')) {
+          setCity(resolvedName.split(',')[0].trim());
+        }
+      } else {
+        setLocationErrorMsg(res.error || 'Failed to save home location.');
+      }
+    } catch (err: any) {
+      console.warn('Set home location error:', err);
+      setLocationErrorMsg(
+        err?.message ||
+          'Unable to retrieve your location. Please ensure location access is permitted in your browser settings and try again.'
+      );
+    } finally {
+      setLocationLoading(false);
+    }
+  };
 
   // Step 2: Dynamic Family Setup
   const [familyCount, setFamilyCount] = useState<number>(3);
@@ -423,6 +471,113 @@ export const PatientOnboardingPage: React.FC<PatientOnboardingPageProps> = ({ on
                 className="bg-white border border-rose-300 rounded-xl px-3 py-2 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-rose-500"
               />
             </div>
+          </div>
+
+          {/* Set Home Location Section */}
+          <div className="bg-blue-50/70 border-2 border-blue-200 rounded-2xl p-4 sm:p-5">
+            <div className="flex items-start justify-between gap-3 mb-3">
+              <div>
+                <h3 className="text-sm font-black text-blue-950 flex items-center gap-2">
+                  <MapPin className="w-4 h-4 text-blue-600" />
+                  <span>Set Home Location (सुरक्षित घर का स्थान)</span>
+                </h3>
+                <p className="text-xs text-blue-800/80 mt-1 leading-relaxed">
+                  Saving your home coordinates creates a safe anchor for wandering protection and neighborhood orientation. 
+                  No background tracking is performed.
+                </p>
+              </div>
+              {homeLocation && (
+                <span className="shrink-0 text-[11px] font-black px-2.5 py-1 bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-full flex items-center gap-1">
+                  <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Saved</span>
+                </span>
+              )}
+            </div>
+
+            {/* Success Notification */}
+            {locationSuccessMsg && (
+              <div className="mb-3.5 p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-2 text-xs font-bold text-emerald-800 animate-in fade-in">
+                <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{locationSuccessMsg}</span>
+              </div>
+            )}
+
+            {/* Error Notification with Help */}
+            {locationErrorMsg && (
+              <div className="mb-3.5 p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs space-y-2 text-amber-900 animate-in fade-in">
+                <div className="font-bold flex items-center gap-2 text-amber-950">
+                  <span>⚠️ {locationErrorMsg}</span>
+                </div>
+                <p className="text-[11px] text-amber-800">
+                  Tip: Look for the lock or site settings icon in your browser's address bar, enable <strong>Location</strong> permission, and click Try Again. You can also skip this and set it later from your dashboard.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleSetHomeLocation}
+                  className="px-3 py-1.5 bg-amber-200 hover:bg-amber-300 text-amber-950 rounded-lg font-bold text-xs transition-colors cursor-pointer"
+                >
+                  Try Again
+                </button>
+              </div>
+            )}
+
+            {/* Main Action / Display Box */}
+            {homeLocation ? (
+              <div className="bg-white rounded-xl border border-blue-200 p-3.5 sm:p-4 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-extrabold text-gray-900 flex items-center gap-1.5">
+                      <span>🏠</span>
+                      <span>{homeLocation.locationName || homeLocation.locality || homeLocation.city || 'Home Coordinates Registered'}</span>
+                    </div>
+                    <div className="text-[11px] text-gray-500 font-mono mt-0.5">
+                      Lat: {homeLocation.latitude.toFixed(5)}°, Lng: {homeLocation.longitude.toFixed(5)}°
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowLocationMap(true)}
+                      className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-xs transition-all cursor-pointer flex items-center gap-1.5"
+                    >
+                      <span>🗺️ View on Map</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSetHomeLocation}
+                      disabled={locationLoading}
+                      className="px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xs border border-gray-300 transition-all cursor-pointer disabled:opacity-50"
+                    >
+                      {locationLoading ? 'Updating...' : 'Change'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col sm:flex-row items-center gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={handleSetHomeLocation}
+                  disabled={locationLoading}
+                  className="w-full sm:w-auto px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-sm shadow-tactile transition-all cursor-pointer flex items-center justify-center gap-2 active:translate-y-0.5 disabled:opacity-60"
+                >
+                  {locationLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-white" />
+                      <span>Detecting Coordinates...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>📍</span>
+                      <span>Set My Home Location</span>
+                    </>
+                  )}
+                </button>
+                <span className="text-[11px] text-gray-500 font-medium text-center sm:text-left">
+                  (Optional — click to allow one-time device location access)
+                </span>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -772,6 +927,21 @@ export const PatientOnboardingPage: React.FC<PatientOnboardingPageProps> = ({ on
           )}
         </div>
       </div>
+
+      {/* Interactive OpenStreetMap Modal */}
+      {showLocationMap && homeLocation && (
+        <HomeLocationModal
+          isOpen={showLocationMap}
+          location={homeLocation}
+          patientId={currentUser?.id}
+          patientName={currentUser?.name}
+          onClose={() => setShowLocationMap(false)}
+          onLocationUpdated={(updated) => {
+            setHomeLocation(updated);
+            setLocationSuccessMsg('Home location updated successfully.');
+          }}
+        />
+      )}
     </div>
   );
 };

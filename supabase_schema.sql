@@ -163,7 +163,22 @@ CREATE TABLE IF NOT EXISTS public.notifications (
 );
 
 -- ------------------------------------------------------------------------------
--- 8. HELPER FUNCTION: Auto-generate unique connection code for patients
+-- 8. PATIENT_LOCATIONS TABLE (Patient Home Location strictly bound to auth.uid())
+-- ------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.patient_locations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  patient_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE UNIQUE,
+  latitude DOUBLE PRECISION NOT NULL,
+  longitude DOUBLE PRECISION NOT NULL,
+  location_name TEXT DEFAULT 'Home',
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_patient_locations_patient ON public.patient_locations(patient_id);
+
+-- ------------------------------------------------------------------------------
+-- 9. HELPER FUNCTION: Auto-generate unique connection code for patients
 -- ------------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.generate_patient_connection_code()
 RETURNS TRIGGER AS $$
@@ -193,6 +208,7 @@ ALTER TABLE public.game_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.reminders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ai_conversations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.patient_locations ENABLE ROW LEVEL SECURITY;
 
 -- Profiles policies
 CREATE POLICY "Users can view their own profile"
@@ -319,3 +335,28 @@ CREATE POLICY "Caregiver can view connected patient reminders"
         AND cp.status = 'approved'
     )
   );
+
+-- ------------------------------------------------------------------------------
+-- Patient Locations RLS (Strictly private: only the patient can access)
+-- ------------------------------------------------------------------------------
+CREATE POLICY "Patients can view own home location"
+  ON public.patient_locations FOR SELECT
+  TO authenticated
+  USING (patient_id = auth.uid());
+
+CREATE POLICY "Patients can insert own home location"
+  ON public.patient_locations FOR INSERT
+  TO authenticated
+  WITH CHECK (patient_id = auth.uid());
+
+CREATE POLICY "Patients can update own home location"
+  ON public.patient_locations FOR UPDATE
+  TO authenticated
+  USING (patient_id = auth.uid())
+  WITH CHECK (patient_id = auth.uid());
+
+CREATE POLICY "Patients can delete own home location"
+  ON public.patient_locations FOR DELETE
+  TO authenticated
+  USING (patient_id = auth.uid());
+
