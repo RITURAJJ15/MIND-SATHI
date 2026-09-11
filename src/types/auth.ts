@@ -85,3 +85,41 @@ export function validateName(name: string): string | null {
   if (name.trim().length > 100) return 'Name must be less than 100 characters.';
   return null;
 }
+
+/**
+ * Strict verification that an email is a genuine Google email address (@gmail.com or @googlemail.com)
+ * and not a placeholder, temporary, or fake email address.
+ */
+export function isGoogleEmail(email: string): boolean {
+  if (!email) return false;
+  const clean = email.trim().toLowerCase();
+
+  // Must match genuine Google email domain (@gmail.com or @googlemail.com)
+  const gmailRegex = /^[a-zA-Z0-9._%+-]{3,}@(gmail\.com|googlemail\.com)$/;
+  if (!gmailRegex.test(clean)) {
+    return false;
+  }
+
+  const [localPart] = clean.split('@');
+
+  // Reject dummy, placeholder, or fake names
+  const fakePlaceholders = [
+    'test', 'fake', 'dummy', 'temp', 'example', 'demo', 'asdf', 'qwerty',
+    'sample', 'fakeemail', 'testmail', 'tempmail', 'disposable', 'noname',
+    '123456', 'aaaaaa', 'testing', 'noreply'
+  ];
+
+  if (fakePlaceholders.includes(localPart)) {
+    return false;
+  }
+
+  if (fakePlaceholders.some((p) => localPart === p || localPart.startsWith(p + '.') || localPart.endsWith('.' + p))) {
+    return false;
+  }
+
+  if (localPart.length < 4) {
+    return false;
+  }
+
+  return true;
+}

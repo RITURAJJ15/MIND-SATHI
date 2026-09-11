@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { GoogleSignInButton } from '../../components/common/GoogleSignInButton';
 import { authService } from '../../services/authService';
-import type { AuthRole } from '../../types/auth';
+import { type AuthRole, isGoogleEmail } from '../../types/auth';
 
 interface CaregiverAuthPageProps {
   onBackToLanding: () => void;
@@ -52,6 +52,11 @@ export const CaregiverAuthPage: React.FC<CaregiverAuthPageProps> = ({
       return;
     }
 
+    if (!isGoogleEmail(email)) {
+      setError('Caregiver sign-in requires a valid Google email address (@gmail.com or @googlemail.com).');
+      return;
+    }
+
     setLoading(true);
     try {
       const res = await authService.loginCaregiverWithEmailPassword(email, password);
@@ -81,6 +86,10 @@ export const CaregiverAuthPage: React.FC<CaregiverAuthPageProps> = ({
     }
     if (!email.trim()) {
       setError('Please enter your email address.');
+      return;
+    }
+    if (!isGoogleEmail(email)) {
+      setError('Caregiver email must be a valid Google email address (@gmail.com or @googlemail.com). Dummy, temporary, or non-Google emails are not allowed.');
       return;
     }
     if (password.length < 6) {
@@ -306,8 +315,9 @@ export const CaregiverAuthPage: React.FC<CaregiverAuthPageProps> = ({
                       className="w-full bg-gray-50 border border-gray-200 rounded-xl pl-10 pr-4 py-2.5 text-sm font-medium focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
                     />
                   </div>
-                  <p className="text-[11px] text-emerald-800 font-semibold mt-1">
-                    ⚠️ Must be a different email from the patient's account.
+                  <p className="text-[11px] text-emerald-800 font-semibold mt-1 flex items-center gap-1.5">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>Must be a genuine Google email (@gmail.com) & separate from patient's email.</span>
                   </p>
                 </div>
 
