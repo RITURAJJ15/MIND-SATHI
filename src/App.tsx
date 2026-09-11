@@ -22,6 +22,7 @@ import { FamilyCallingPage } from './pages/FamilyCallingPage';
 import { AIAssistantPage } from './pages/AIAssistantPage';
 import { AdminPortalPage } from './pages/AdminPortalPage';
 import { PatientOnboardingPage } from './pages/auth/PatientOnboardingPage';
+import { CaregiverAuthPage } from './pages/auth/CaregiverAuthPage';
 import { authService } from './services/authService';
 import { useCurrentUser } from './hooks/useCurrentUser';
 import type { AuthScreen, AuthRole } from './types/auth';
@@ -70,7 +71,7 @@ export const App: React.FC = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleEnterApp = (screen: 'login' | 'register' = 'login') => {
+  const handleEnterApp = (screen: 'login' | 'register' | 'caregiver-auth' = 'login') => {
     setAuthScreen(screen);
     setShowLanding(false);
     window.scrollTo({ top: 0, behavior: 'instant' });
@@ -132,6 +133,15 @@ export const App: React.FC = () => {
 
   // ── Auth screens (not yet authenticated) ──────────────────────────────────
   if (!isAuthenticated) {
+    if (authScreen === 'caregiver-auth') {
+      return (
+        <CaregiverAuthPage
+          onBackToLanding={() => setShowLanding(true)}
+          onSuccess={handleAuthSuccess}
+        />
+      );
+    }
+
     return (
       <AuthLayout onBackToLanding={() => setShowLanding(true)}>
         {authScreen === 'login' && (

@@ -150,8 +150,8 @@ export const CaregiverPortalPage: React.FC = () => {
     }
   };
 
-  // Handle Connecting Patient using Connection Code or Email
-  const handleConnectByCodeOrEmail = async (e?: React.FormEvent) => {
+  // Handle Connecting Patient using Registered Email
+  const handleConnectByEmail = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!currentUser?.id || !patientIdentifier.trim()) return;
     setLinkError('');
@@ -159,9 +159,9 @@ export const CaregiverPortalPage: React.FC = () => {
     setLinkLoading(true);
 
     try {
-      const res = await caregiverService.linkPatientToCaregiver(currentUser.id, patientIdentifier.trim());
+      const res = await caregiverService.linkPatientByEmail(currentUser.id, patientIdentifier.trim());
       if (!res.success || !res.patient) {
-        setLinkError(res.error || 'Could not connect to patient. Please check the Connection Code or Email.');
+        setLinkError(res.error || 'Could not connect to patient. Please check the email address.');
       } else {
         setLinkSuccess(`Successfully connected to ${res.patient.full_name || res.patient.name}!`);
         setShowLinkModal(false);
@@ -181,7 +181,8 @@ export const CaregiverPortalPage: React.FC = () => {
   // Handle Disconnecting / Unlinking Patient
   const handleDisconnectPatient = async () => {
     if (!currentUser?.id) return;
-    if (window.confirm('Are you sure you want to disconnect from this patient? You can reconnect at any time using the patient\'s email and password.')) {
+    const patientName = selectedPatient?.full_name || selectedPatient?.name || 'this patient';
+    if (window.confirm(`Are you sure you want to unlink from ${patientName}? Once unlinked, you will no longer have access to their records until you reconnect.`)) {
       setLinkLoading(true);
       try {
         await caregiverService.unlinkPatient(currentUser.id);
@@ -190,7 +191,7 @@ export const CaregiverPortalPage: React.FC = () => {
         setPatientFamily([]);
         setPatientGameSessions([]);
         setAiInsight(null);
-        caregiverService.getAvailablePatients().then((av) => setAvailablePatients(av));
+        setLinkSuccess('');
       } finally {
         setLinkLoading(false);
       }
@@ -267,6 +268,24 @@ export const CaregiverPortalPage: React.FC = () => {
                   <p className="text-xs text-gray-500 pt-2 border-t border-emerald-200/60">
                     Your caregiver has secure real-time access to your daily cognitive scores, medication reminders, and safety updates.
                   </p>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!currentUser?.id) return;
+                      if (window.confirm('Are you sure you want to unlink your caregiver? Once unlinked, they will be disconnected and will not be able to access your records.')) {
+                        setLoadingCaregiverInfo(true);
+                        try {
+                          await caregiverService.unlinkCaregiverFromPatient(currentUser.id);
+                          setAssignedCaregiver(null);
+                        } finally {
+                          setLoadingCaregiverInfo(false);
+                        }
+                      }
+                    }}
+                    className="mt-2 px-4 py-2 bg-white hover:bg-rose-50 text-rose-700 hover:text-rose-800 border border-rose-300 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-xs"
+                  >
+                    Unlink Caregiver
+                  </button>
                 </div>
               </div>
             ) : (
@@ -412,13 +431,13 @@ export const CaregiverPortalPage: React.FC = () => {
         <div className="bg-white p-8 rounded-3xl shadow-elder border border-emerald-200">
           <div className="text-center mb-6">
             <div className="w-16 h-16 bg-emerald-100 text-emerald-800 rounded-3xl flex items-center justify-center mx-auto mb-3 border border-emerald-300">
-              <LinkIcon className="w-8 h-8 text-emerald-700" />
+              <Mail className="w-8 h-8 text-emerald-700" />
             </div>
             <h2 className="text-2xl font-black text-gray-900">
-              Connect with Your Patient
+              Connect to Patient
             </h2>
             <p className="text-sm text-gray-600 mt-1 max-w-md mx-auto leading-relaxed">
-              Connect to your patient securely using their unique Connection Code (shown on their home screen) or verified Google email.
+              Enter your patient's registered email address to link their account to your caregiver panel.
             </p>
           </div>
 
@@ -436,24 +455,24 @@ export const CaregiverPortalPage: React.FC = () => {
             </div>
           )}
 
-          <form onSubmit={handleConnectByCodeOrEmail} className="space-y-4 mb-6 text-left">
+          <form onSubmit={handleConnectByEmail} className="space-y-4 mb-6 text-left">
             <div>
-              <label className="block text-xs font-bold text-gray-700 mb-1">
-                Patient's Connection Code or Google Email
+              <label className="block text-xs font-bold text-gray-700 mb-1 uppercase tracking-wider">
+                Patient's Registered Email ID
               </label>
               <div className="relative">
-                <LinkIcon className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
+                <Mail className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
                 <input
-                  type="text"
+                  type="email"
                   required
                   value={patientIdentifier}
                   onChange={(e) => setPatientIdentifier(e.target.value)}
-                  placeholder="e.g. MS-1A2B3C or senior@gmail.com"
-                  className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-10 pr-4 py-3 text-sm font-semibold uppercase placeholder:normal-case focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  placeholder="e.g. senior@gmail.com"
+                  className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-10 pr-4 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
               <p className="text-[11px] text-gray-500 mt-1.5">
-                💡 Patients can find their 8-character code (e.g. <strong>MS-XXXXXX</strong>) or registered Google email on their MIND SATHI Home Screen banner.
+                💡 Enter the exact Google or email account your patient used to register in MIND SATHI.
               </p>
             </div>
 
@@ -463,9 +482,19 @@ export const CaregiverPortalPage: React.FC = () => {
               className="w-full py-3.5 bg-gradient-to-r from-emerald-700 to-teal-700 hover:from-emerald-800 hover:to-teal-800 text-white font-black text-sm rounded-xl shadow-tactile transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {linkLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <LinkIcon className="w-4 h-4" />}
-              <span>Authorize & Connect Patient</span>
+              <span>Connect to Patient</span>
             </button>
           </form>
+
+          <div className="bg-emerald-50/60 border border-emerald-200/80 rounded-2xl p-4 text-left space-y-1">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-950">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>1 Caregiver ↔ 1 Patient Privacy Protocol</span>
+            </div>
+            <p className="text-[11px] text-gray-600 leading-relaxed">
+              Once connected, the patient's real cognitive telemetry, game records, and medical profile will be displayed here. The connection will remain active even after logout until either you or the patient explicitly unlinks.
+            </p>
+          </div>
         </div>
       </div>
     );
@@ -515,9 +544,9 @@ export const CaregiverPortalPage: React.FC = () => {
             type="button"
             onClick={handleDisconnectPatient}
             disabled={linkLoading}
-            className="text-xs font-bold text-gray-600 hover:text-red-700 bg-gray-100 hover:bg-red-50 border border-gray-200 hover:border-red-200 px-3.5 py-2 rounded-xl transition-all cursor-pointer"
+            className="text-xs font-bold text-rose-700 hover:text-white bg-rose-50 hover:bg-rose-600 border border-rose-200 hover:border-rose-600 px-3.5 py-2 rounded-xl transition-all cursor-pointer shadow-xs"
           >
-            Disconnect / Switch Patient
+            Unlink Patient
           </button>
         </div>
       </div>
@@ -598,14 +627,12 @@ export const CaregiverPortalPage: React.FC = () => {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => {
-                setShowLinkModal(true);
-                caregiverService.getAvailablePatients().then((av) => setAvailablePatients(av));
-              }}
-              className="text-xs font-bold text-gray-700 bg-gray-100 hover:bg-gray-200 px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 border border-gray-200"
+              onClick={handleDisconnectPatient}
+              disabled={linkLoading}
+              className="text-xs font-bold text-rose-700 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 border border-rose-200"
             >
-              <RefreshCw className="w-3.5 h-3.5 text-gray-500" />
-              <span>Change Connected Senior</span>
+              <LogOut className="w-3.5 h-3.5 text-rose-600" />
+              <span>Unlink Patient</span>
             </button>
           </div>
         </div>
@@ -1030,7 +1057,7 @@ export const CaregiverPortalPage: React.FC = () => {
             <form
               onSubmit={(e) => {
                 e.preventDefault();
-                handleConnectByCodeOrEmail();
+                handleConnectByEmail();
               }}
               className="space-y-3 mb-4 text-left"
             >

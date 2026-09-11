@@ -62,7 +62,9 @@ CREATE TABLE IF NOT EXISTS public.caregiver_patient (
   connection_code TEXT,
   created_at TIMESTAMPTZ DEFAULT now(),
   approved_at TIMESTAMPTZ DEFAULT now(),
-  CONSTRAINT uq_caregiver_patient UNIQUE (patient_id, caregiver_id)
+  CONSTRAINT uq_caregiver_patient UNIQUE (patient_id, caregiver_id),
+  CONSTRAINT uq_one_caregiver_per_patient UNIQUE (patient_id),
+  CONSTRAINT uq_one_patient_per_caregiver UNIQUE (caregiver_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_cg_patient_caregiver ON public.caregiver_patient(caregiver_id);

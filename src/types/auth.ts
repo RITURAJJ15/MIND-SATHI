@@ -42,7 +42,7 @@ export interface AuthSession {
   expiresAt: string;
 }
 
-export type AuthScreen = 'login' | 'register' | 'forgot-password' | 'select-role';
+export type AuthScreen = 'login' | 'register' | 'forgot-password' | 'select-role' | 'caregiver-auth';
 
 export interface AuthError {
   field?: string;

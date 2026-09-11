@@ -565,6 +565,29 @@ class AuthService {
           supabase.from('profiles').update({ profile_photo_url: mapped.avatarUrl }).eq('id', userId).then(() => {});
         }
 
+        const pendingOauthRole = sessionStorage.getItem('ms_pending_oauth_role') as UserRole;
+        if (pendingOauthRole) {
+          sessionStorage.removeItem('ms_pending_oauth_role');
+          if (pendingOauthRole === 'caregiver' && (mapped.role === 'elderly' || (mapped.role as string) === 'patient')) {
+            await supabase.auth.signOut();
+            this.session = null;
+            this.currentProfile = null;
+            localStorage.removeItem(SK_SESSION);
+            this.notifyListeners();
+            alert(`This Google account (${email}) is already registered as a Patient. A Caregiver must use a separate Google account with a different email address.`);
+            return null;
+          }
+          if (pendingOauthRole === 'elderly' && mapped.role === 'caregiver') {
+            await supabase.auth.signOut();
+            this.session = null;
+            this.currentProfile = null;
+            localStorage.removeItem(SK_SESSION);
+            this.notifyListeners();
+            alert(`This Google account (${email}) is registered as a Caregiver. Please use the Caregiver Portal to sign in.`);
+            return null;
+          }
+        }
+
         this.needsRoleSelection = false;
         this.pendingGoogleUser = null;
         sessionStorage.removeItem('ms_pending_oauth_role');
@@ -701,6 +724,14 @@ class AuthService {
         };
       }
 
+      if (profile.role === 'caregiver') {
+        await this.logout();
+        return {
+          success: false,
+          error: { message: 'This account is registered as a Caregiver. Please use the Caregiver Portal to sign in.' },
+        };
+      }
+
       this.session = makeSession(profile, normalizedEmail);
       if (rememberMe) {
         this.session.expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
@@ -712,6 +743,181 @@ class AuthService {
       return {
         success: false,
         error: { message: err.message || 'Login failed. Please sign in with Google.' },
+      };
+    }
+  }
+
+  /**
+   * Dedicated Caregiver Sign-In with Email & Password.
+   * Enforces strict role collision prevention:
+   * If this account was registered as a Patient, it CANNOT be used as a caregiver!
+   */
+  public async loginCaregiverWithEmailPassword(
+    email: string,
+    password: string
+  ): Promise<AuthResult<AuthSession>> {
+    const normalizedEmail = email.trim().toLowerCase();
+    try {
+      // 1. Check existing role in Supabase profiles
+      const { data: existingProfile } = await supabase
+        .from('profiles')
+        .select('id, role, full_name')
+        .ilike('email', normalizedEmail)
+        .maybeSingle();
+
+      if (existingProfile) {
+        if (existingProfile.role === 'elderly' || (existingProfile.role as string) === 'patient') {
+          return {
+            success: false,
+            error: {
+              message: `This account (${normalizedEmail}) is registered as a Patient. A Caregiver must use a separate account with a different email address.`,
+            },
+          };
+        }
+      }
+
+      // 2. Sign in via Supabase Auth
+      const { data: sbData, error: sbError } = await supabase.auth.signInWithPassword({
+        email: normalizedEmail,
+        password,
+      });
+
+      if (sbError || !sbData?.user) {
+        return {
+          success: false,
+          error: { message: sbError?.message || 'Invalid caregiver email or password.' },
+        };
+      }
+
+      const userId = sbData.user.id;
+      // 3. Verify profile in Supabase
+      const profile = await this.syncProfileFromSupabase(userId, normalizedEmail);
+      if (!profile) {
+        return {
+          success: false,
+          error: { message: 'Caregiver profile could not be loaded.' },
+        };
+      }
+
+      if (profile.role !== 'caregiver') {
+        await this.logout();
+        return {
+          success: false,
+          error: {
+            message: `This account is registered as a ${profile.role}. Caregivers must use a separate account.`,
+          },
+        };
+      }
+
+      this.session = makeSession(profile, normalizedEmail);
+      localStorage.setItem(SK_SESSION, JSON.stringify(this.session));
+      this.caregiverProfile = profile;
+      this.currentProfile = profile;
+      localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(profile));
+      this.notifyListeners();
+      return { success: true, data: this.session };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: { message: err.message || 'Caregiver sign-in failed.' },
+      };
+    }
+  }
+
+  /**
+   * Dedicated Caregiver Registration with Name, Email & Password.
+   * Enforces strict role collision prevention:
+   * If this email is already a Patient account, registration is strictly rejected.
+   */
+  public async registerCaregiverWithEmailPassword(payload: {
+    name: string;
+    email: string;
+    password: string;
+    phone?: string;
+  }): Promise<AuthResult<AuthSession>> {
+    const email = payload.email.trim().toLowerCase();
+    const fullName = payload.name.trim();
+
+    try {
+      // 1. Check if email is already registered as a Patient in profiles
+      const { data: existingProfile } = await supabase
+        .from('profiles')
+        .select('id, role, full_name')
+        .ilike('email', email)
+        .maybeSingle();
+
+      if (existingProfile) {
+        if (existingProfile.role === 'elderly' || (existingProfile.role as string) === 'patient') {
+          return {
+            success: false,
+            error: {
+              message: `This email (${email}) is already registered as a Patient. A Caregiver must register with a separate email address.`,
+            },
+          };
+        }
+      }
+
+      // 2. Sign up via Supabase Auth
+      const { data: sbData, error: sbError } = await supabase.auth.signUp({
+        email,
+        password: payload.password,
+        options: {
+          data: {
+            full_name: fullName,
+            role: 'caregiver',
+            mobile: payload.phone || '',
+          },
+        },
+      });
+
+      if (sbError || !sbData?.user) {
+        return {
+          success: false,
+          error: { message: sbError?.message || 'Caregiver registration failed.' },
+        };
+      }
+
+      const userId = sbData.user.id;
+      const photoUrl = `https://api.dicebear.com/9.x/avataaars/svg?seed=${userId}&backgroundColor=b6e3f4`;
+
+      // 3. Upsert caregiver profile
+      try {
+        await supabase.from('profiles').upsert({
+          id: userId,
+          email,
+          full_name: fullName,
+          preferred_name: fullName.split(' ')[0] || 'Caregiver',
+          role: 'caregiver',
+          profile_photo_url: photoUrl,
+          phone: payload.phone || '',
+          has_completed_onboarding: true,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        });
+      } catch (upsertErr) {
+        console.warn('[AuthService] Caregiver profile upsert note:', upsertErr);
+      }
+
+      const profile = await this.syncProfileFromSupabase(userId, email);
+      if (!profile) {
+        return {
+          success: false,
+          error: { message: 'Caregiver profile could not be loaded.' },
+        };
+      }
+
+      const session = makeSession(profile, email, payload.phone || '');
+      this.session = session;
+      this.caregiverProfile = profile;
+      this.currentProfile = profile;
+      localStorage.setItem(SK_SESSION, JSON.stringify(session));
+      localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(profile));
+      this.notifyListeners();
+      return { success: true, data: session };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: { message: err.message || 'Caregiver registration failed.' },
       };
     }
   }

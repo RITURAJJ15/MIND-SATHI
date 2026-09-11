@@ -980,21 +980,258 @@ class CaregiverService {
   }
 
   /**
+   * Links a registered elderly patient to the caregiver strictly using the patient's registered email ID.
+   * Enforces STRICT 1-TO-1 RELATIONSHIP:
+   * - One Patient ↔ One Caregiver.
+   * - Patient must be registered with role 'elderly' or 'patient'.
+   * - Patient cannot be already connected to another caregiver.
+   * - Connection is saved in Supabase database (`caregiver_patient` table and `profiles` table)
+   *   and persists across logout.
+   */
+  public async linkPatientByEmail(
+    caregiverId: string,
+    patientEmail: string
+  ): Promise<{ success: boolean; error?: string; patient?: any }> {
+    if (!caregiverId || !patientEmail.trim()) {
+      return { success: false, error: 'Caregiver ID and Patient email address are required.' };
+    }
+
+    const cleanEmail = patientEmail.trim().toLowerCase();
+
+    try {
+      // 1. Query patient in Supabase profiles by email
+      let targetPatient: any = null;
+      try {
+        const { data: dbPatient, error: ptErr } = await supabase
+          .from('profiles')
+          .select('*')
+          .ilike('email', cleanEmail)
+          .maybeSingle();
+
+        if (dbPatient && !ptErr) {
+          if (dbPatient.role === 'elderly' || (dbPatient.role as string) === 'patient') {
+            targetPatient = dbPatient;
+          } else if (dbPatient.role === 'caregiver') {
+            return {
+              success: false,
+              error: `The email "${cleanEmail}" is registered as a Caregiver, not a Patient. Both accounts must be separate.`,
+            };
+          }
+        }
+      } catch (err) {
+        console.warn('[CaregiverService] Error searching patient by email in Supabase:', err);
+      }
+
+      // 2. Check local profiles cache if not yet found
+      if (!targetPatient) {
+        const allProfiles = authService.getAllProfiles();
+        const foundLocal = allProfiles.find(
+          (p) =>
+            p.email &&
+            p.email.toLowerCase() === cleanEmail &&
+            (p.role === 'elderly' || (p.role as string) === 'patient')
+        );
+        if (foundLocal) {
+          targetPatient = foundLocal;
+        }
+      }
+
+      if (!targetPatient) {
+        return {
+          success: false,
+          error: `No registered patient found with email "${cleanEmail}". Please verify the email or ensure the patient has created their MIND SATHI account first.`,
+        };
+      }
+
+      // 3. Strict 1-to-1 check: Check if patient is already linked to another caregiver in Supabase
+      try {
+        const { data: existingLink } = await supabase
+          .from('caregiver_patient')
+          .select('id, caregiver_id')
+          .eq('patient_id', targetPatient.id)
+          .maybeSingle();
+
+        if (existingLink && existingLink.caregiver_id !== caregiverId) {
+          return {
+            success: false,
+            error: `Patient "${targetPatient.full_name || targetPatient.name}" is already linked to another caregiver. MIND SATHI strictly maintains a 1 Patient ↔ 1 Caregiver relationship.`,
+          };
+        }
+      } catch (err) {
+        console.warn('[CaregiverService] Error checking existing Supabase link:', err);
+      }
+
+      // Check local cache for other caregivers who linked this patient
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(STORAGE_KEY_CAREGIVER_PATIENT) && key !== `${STORAGE_KEY_CAREGIVER_PATIENT}_${caregiverId}`) {
+          try {
+            const val = JSON.parse(localStorage.getItem(key) || '[]');
+            if (Array.isArray(val) && val.some((p: any) => p.id === targetPatient.id)) {
+              return {
+                success: false,
+                error: `Patient "${targetPatient.full_name || targetPatient.name}" is already linked to another caregiver. MIND SATHI strictly maintains a 1 Patient ↔ 1 Caregiver relationship.`,
+              };
+            }
+          } catch {}
+        }
+      }
+
+      // 4. Save 1-to-1 Link in Database & Local Storage
+      // Remove any prior patient connection for this caregiver (strict 1-to-1)
+      try {
+        await supabase.from('caregiver_patient').delete().eq('caregiver_id', caregiverId);
+      } catch {}
+
+      // Insert new 1-to-1 link in Supabase
+      try {
+        await supabase.from('caregiver_patient').upsert({
+          caregiver_id: caregiverId,
+          patient_id: targetPatient.id,
+          status: 'approved',
+        });
+      } catch (insertErr: any) {
+        console.warn('[CaregiverService] Supabase caregiver_patient upsert notice:', insertErr?.message);
+      }
+
+      // Normalize targetPatient object
+      const formattedPatient = {
+        ...targetPatient,
+        id: targetPatient.id,
+        full_name: targetPatient.full_name || targetPatient.name,
+        name: targetPatient.full_name || targetPatient.name,
+        preferred_name: targetPatient.preferred_name || targetPatient.preferredName || targetPatient.name,
+        preferredName: targetPatient.preferred_name || targetPatient.preferredName || targetPatient.name,
+        email: targetPatient.email || cleanEmail,
+        phone: targetPatient.phone || '',
+        avatarUrl: targetPatient.profile_photo_url || targetPatient.avatarUrl || `https://api.dicebear.com/9.x/avataaars/svg?seed=${targetPatient.id}&backgroundColor=b6e3f4`,
+        profile_photo_url: targetPatient.profile_photo_url || targetPatient.avatarUrl || `https://api.dicebear.com/9.x/avataaars/svg?seed=${targetPatient.id}&backgroundColor=b6e3f4`,
+        caregiverIds: [caregiverId],
+      };
+
+      // Update local caregiver_patient cache
+      const cachedKey = `${STORAGE_KEY_CAREGIVER_PATIENT}_${caregiverId}`;
+      localStorage.setItem(cachedKey, JSON.stringify([formattedPatient]));
+
+      // Update targetPatient and caregiver in local profiles
+      const allProfiles = authService.getAllProfiles();
+      const existingIdx = allProfiles.findIndex((p) => p.id === targetPatient.id);
+      if (existingIdx >= 0) {
+        allProfiles[existingIdx] = {
+          ...allProfiles[existingIdx],
+          caregiverIds: [caregiverId],
+        };
+      }
+      const cgIdx = allProfiles.findIndex((p) => p.id === caregiverId);
+      if (cgIdx >= 0) {
+        allProfiles[cgIdx] = {
+          ...allProfiles[cgIdx],
+          caregiverIds: [targetPatient.id],
+        };
+      }
+      localStorage.setItem('ms_all_profiles', JSON.stringify(allProfiles));
+
+      // Update caregiver profile in Supabase profiles with linked patient ID
+      try {
+        await supabase.from('profiles').update({
+          caregiver_ids: [targetPatient.id],
+          updated_at: new Date().toISOString(),
+        }).eq('id', caregiverId);
+      } catch {}
+
+      // Update patient profile in Supabase profiles with linked caregiver ID
+      try {
+        await supabase.from('profiles').update({
+          caregiver_ids: [caregiverId],
+          updated_at: new Date().toISOString(),
+        }).eq('id', targetPatient.id);
+      } catch {}
+
+      // Update Dexie IndexedDB
+      try {
+        if (typeof window !== 'undefined') {
+          await offlineDb.profiles.put(formattedPatient as any);
+        }
+      } catch {}
+
+      authService.setLinkedPatient(formattedPatient as any);
+      return { success: true, patient: formattedPatient };
+    } catch (err: any) {
+      console.error('[CaregiverService] linkPatientByEmail exception:', err);
+      return { success: false, error: err.message || 'Error linking patient.' };
+    }
+  }
+
+  /**
    * Unlinks the currently connected patient from the caregiver.
+   * Completely removes the relationship in Supabase and local storage,
+   * allowing both parties to relink with others.
    */
   public async unlinkPatient(caregiverId: string): Promise<boolean> {
     if (!caregiverId) return false;
     try {
+      // 1. Find the connected patient id first
+      let patientId: string | null = null;
+      try {
+        const { data: linkRows } = await supabase
+          .from('caregiver_patient')
+          .select('patient_id')
+          .eq('caregiver_id', caregiverId)
+          .limit(1);
+        if (linkRows && linkRows.length > 0) {
+          patientId = linkRows[0].patient_id;
+        }
+      } catch {}
+
+      // 2. Delete the link from Supabase caregiver_patient table
       await supabase.from('caregiver_patient').delete().eq('caregiver_id', caregiverId);
+
+      // 3. Clear caregiver_ids on caregiver profile in Supabase
+      try {
+        await supabase
+          .from('profiles')
+          .update({ caregiver_ids: [], updated_at: new Date().toISOString() })
+          .eq('id', caregiverId);
+      } catch {}
+
+      // 4. Clear caregiver_ids on patient profile in Supabase if found
+      if (patientId) {
+        try {
+          await supabase
+            .from('profiles')
+            .update({ caregiver_ids: [], updated_at: new Date().toISOString() })
+            .eq('id', patientId);
+        } catch {}
+      }
+
+      // 5. Clean up local storage
       localStorage.removeItem(`${STORAGE_KEY_CAREGIVER_PATIENT}_${caregiverId}`);
       const allProfiles = authService.getAllProfiles();
       const cg = allProfiles.find((p) => p.id === caregiverId);
-      if (cg) {
-        cg.caregiverIds = [];
-        localStorage.setItem('ms_all_profiles', JSON.stringify(allProfiles));
+      if (cg) cg.caregiverIds = [];
+      if (patientId) {
+        const pt = allProfiles.find((p) => p.id === patientId);
+        if (pt) pt.caregiverIds = [];
       }
+      localStorage.setItem('ms_all_profiles', JSON.stringify(allProfiles));
+
+      // Clear any cache keys
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && k.startsWith(`${STORAGE_KEY_CAREGIVER_PATIENT}_`)) {
+            const raw = localStorage.getItem(k);
+            if (raw && (raw.includes(caregiverId) || (patientId && raw.includes(patientId)))) {
+              localStorage.removeItem(k);
+            }
+          }
+        }
+      } catch {}
+
+      authService.setLinkedPatient(null as any);
       return true;
-    } catch {
+    } catch (e) {
+      console.warn('[CaregiverService] unlinkPatient error:', e);
       return false;
     }
   }

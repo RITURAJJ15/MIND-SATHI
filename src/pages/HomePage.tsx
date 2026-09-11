@@ -468,7 +468,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
                   No Family Caregiver Connected
                 </div>
                 <p className="text-xs text-amber-950 font-medium max-w-xl">
-                  Your caregiver can sign in from the Landing Page and connect using your email ({currentUser.email}) and password.
+                  Your caregiver can sign in to the dedicated Caregiver Portal and connect directly using your registered email ({currentUser.email || 'your account email'}).
                 </p>
               </div>
             </div>
