@@ -66,11 +66,11 @@ export const App: React.FC = () => {
         return;
       } else if (userRole === 'elderly' || (userRole as string) === 'patient' || isElderly) {
         // Patient must stay in patient area
-        if (currentPath === '/') {
+        if (currentPath === '/' || currentPath === '/patient/auth') {
           navigate('/patient/dashboard', true);
         }
       } else if (userRole === 'clinician') {
-        if (currentPath === '/patient/dashboard' || currentPath === '/') {
+        if (currentPath === '/patient/dashboard' || currentPath === '/' || currentPath === '/doctor/auth') {
           navigate('/doctor/dashboard', true);
         }
       }
