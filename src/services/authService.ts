@@ -524,12 +524,20 @@ class AuthService {
       });
 
       if (error) {
-        return { success: false, error: error.message };
+        let msg = error.message;
+        if (msg.includes('provider is not enabled') || msg.includes('Unsupported provider')) {
+          msg = 'Google provider is not enabled in your Supabase project. Please enable Google under Authentication > Providers in your Supabase dashboard.';
+        }
+        return { success: false, error: msg };
       }
       return { success: true };
     } catch (err: any) {
       console.error('[AuthService] signInWithGoogle error:', err);
-      return { success: false, error: err.message || 'Google Sign-In failed to initialize.' };
+      let msg = err.message || 'Google Sign-In failed to initialize.';
+      if (msg.includes('provider is not enabled') || msg.includes('Unsupported provider')) {
+        msg = 'Google provider is not enabled in your Supabase project. Please enable Google under Authentication > Providers in your Supabase dashboard.';
+      }
+      return { success: false, error: msg };
     }
   }
 
