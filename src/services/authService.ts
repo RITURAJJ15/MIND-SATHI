@@ -151,6 +151,18 @@ function makeSession(profile: UserProfile, email: string, mobile = ''): AuthSess
   };
 }
 
+export interface SignUpResult {
+  success: boolean;
+  error?: string;
+  isRateLimited?: boolean;
+  isAlreadyRegistered?: boolean;
+  needsEmailConfirmation?: boolean;
+  isUnconfirmed?: boolean;
+  email?: string;
+  message?: string;
+  profile?: UserProfile;
+}
+
 // ── service class ─────────────────────────────────────────────────────────────
 
 class AuthService {
@@ -160,6 +172,13 @@ class AuthService {
   private listeners: Set<(session: AuthSession | null) => void> = new Set();
   private needsRoleSelection: boolean = false;
   private pendingGoogleUser: any = null;
+
+  // Single-flight and cooldown protection to avoid repeated Supabase requests
+  private isCaregiverSignUpInFlight: boolean = false;
+  private isPatientSignUpInFlight: boolean = false;
+  private isResendInFlight: boolean = false;
+  private lastResendTimestamps: Record<string, number> = {};
+  private lastForgotPasswordTimestamps: Record<string, number> = {};
 
   /** Resolves once the Supabase session check on startup is complete. */
   public readonly ready: Promise<void>;
@@ -276,16 +295,18 @@ class AuthService {
   /**
    * Caregiver Account Creation with Email, Password, Name, and Phone.
    * Enforces role = 'caregiver' and creates/updates profile in Supabase profiles.
+   * Prevents duplicate requests, does NOT auto-retry on rate limits, and preserves accounts.
    */
   public async signUpCaregiverWithEmail(
     email: string,
     password: string,
     fullName: string,
     phone?: string
-  ): Promise<{ success: boolean; error?: string; profile?: UserProfile }> {
+  ): Promise<SignUpResult> {
     const cleanEmail = (email || '').trim().toLowerCase();
     const cleanName = (fullName || '').trim();
 
+    // 1. Validate fields
     if (!cleanEmail || !cleanName) {
       return { success: false, error: 'Name and email address are required.' };
     }
@@ -293,8 +314,26 @@ class AuthService {
       return { success: false, error: 'Password must be at least 6 characters.' };
     }
 
+    // 2. Prevent duplicate signup requests caused by double-clicking
+    if (this.isCaregiverSignUpInFlight) {
+      return { success: false, error: 'A registration request is already in progress. Please wait.' };
+    }
+
+    // 3. Check if user is already authenticated
+    if (this.session && this.currentProfile) {
+      if (this.currentProfile.role === 'caregiver') {
+        return {
+          success: true,
+          profile: this.currentProfile,
+          message: 'You are already signed in as a Caregiver.',
+        };
+      }
+    }
+
     try {
-      // 1. Check if email is already registered in profiles
+      this.isCaregiverSignUpInFlight = true;
+
+      // 4. Pre-check existing profile in database
       const { data: existingProfile } = await supabase
         .from('profiles')
         .select('id, role')
@@ -305,21 +344,19 @@ class AuthService {
         if (existingProfile.role === 'elderly' || (existingProfile.role as string) === 'patient') {
           return {
             success: false,
-            error: 'This email is already registered as an Elderly Patient. Caregivers must use a different email address.',
+            error: 'This email is already registered as a Patient. Caregivers must use a separate email address.',
           };
         }
         if (existingProfile.role === 'caregiver') {
-          // Account already exists — try logging in immediately!
-          const loginRes = await this.signInCaregiverWithEmail(cleanEmail, password);
-          if (loginRes.success) return loginRes;
           return {
             success: false,
-            error: 'An account with this email already exists. Please switch to the "Sign In" tab to log in with your password.',
+            isAlreadyRegistered: true,
+            error: 'An account with this email is already registered. Please switch to the "Sign In" tab to log in with your password.',
           };
         }
       }
 
-      // 2. Register with Supabase Auth
+      // 5. Exactly ONE call to Supabase Auth signUp (NO automatic retries!)
       const { data: authData, error: signUpErr } = await supabase.auth.signUp({
         email: cleanEmail,
         password,
@@ -333,20 +370,27 @@ class AuthService {
         },
       });
 
+      // 6. Handle Supabase Auth error strictly without auto-retries
       if (signUpErr) {
         const errMsg = (signUpErr.message || '').toLowerCase();
-        if (errMsg.includes('already registered') || errMsg.includes('rate limit') || errMsg.includes('rate_limit')) {
-          // Attempt login immediately in case user was already created
-          const loginRes = await this.signInCaregiverWithEmail(cleanEmail, password);
-          if (loginRes.success) return loginRes;
+        const isRateLimit = signUpErr.status === 429 || errMsg.includes('rate limit') || errMsg.includes('rate_limit');
 
-          if (errMsg.includes('rate limit') || errMsg.includes('rate_limit')) {
-            return {
-              success: false,
-              error: 'Email confirmation rate limit exceeded on Supabase mailer (limit: 3/hour). If you have already registered, please click the "Sign In" tab. Or click "Continue with Google as Caregiver" to sign in instantly without email limits!',
-            };
-          }
+        if (isRateLimit) {
+          return {
+            success: false,
+            isRateLimited: true,
+            error: 'Email confirmation rate limit exceeded on Supabase mailer (limit: 3/hour). If you have already registered, please click the "Sign In" tab. You can also sign in instantly using Google without email limits.',
+          };
         }
+
+        if (errMsg.includes('already registered')) {
+          return {
+            success: false,
+            isAlreadyRegistered: true,
+            error: 'An account with this email already exists. Please switch to the "Sign In" tab to log in with your password.',
+          };
+        }
+
         return { success: false, error: signUpErr.message };
       }
 
@@ -355,7 +399,16 @@ class AuthService {
         return { success: false, error: 'Could not create account. Please try again.' };
       }
 
-      // 3. Upsert profile in public.profiles table
+      // Check if user already existed (Supabase returns empty identities array when email confirmation is on)
+      if (Array.isArray(user.identities) && user.identities.length === 0) {
+        return {
+          success: false,
+          isAlreadyRegistered: true,
+          error: 'An account with this email is already registered. Please switch to the "Sign In" tab to log in.',
+        };
+      }
+
+      // 7. Upsert profile in public.profiles table (preserves account permanently)
       const profileData: any = {
         id: user.id,
         role: 'caregiver',
@@ -370,24 +423,32 @@ class AuthService {
         .upsert(profileData);
 
       if (upsertErr) {
-        console.warn('[AuthService] Profile upsert notice:', upsertErr.message);
+        console.warn('[AuthService] Caregiver profile upsert notice:', upsertErr.message);
       }
 
-      // 4. If session was established immediately
+      // 8. Inspect authData.session:
+      // If session exists -> email confirmation disabled; load profile and proceed to caregiver portal
+      // If session is null -> email confirmation enabled; prompt user to check email
       if (authData.session) {
         const synced = await this.syncProfileFromSupabase(user.id, cleanEmail);
-        return { success: true, profile: synced || undefined };
-      } else {
-        const loginRes = await this.signInCaregiverWithEmail(cleanEmail, password);
-        if (loginRes.success) return loginRes;
         return {
           success: true,
-          error: 'Account created! Please sign in with your email and password.',
+          needsEmailConfirmation: false,
+          profile: synced || undefined,
+        };
+      } else {
+        return {
+          success: true,
+          needsEmailConfirmation: true,
+          email: cleanEmail,
+          message: 'Account created! Please check your email inbox to confirm your account before signing in.',
         };
       }
     } catch (err: any) {
-      console.error('[AuthService] signUpCaregiverWithEmail error:', err);
+      console.error('[AuthService] signUpCaregiverWithEmail exception:', err);
       return { success: false, error: err.message || 'Failed to create caregiver account.' };
+    } finally {
+      this.isCaregiverSignUpInFlight = false;
     }
   }
 
@@ -398,7 +459,7 @@ class AuthService {
   public async signInCaregiverWithEmail(
     email: string,
     password: string
-  ): Promise<{ success: boolean; error?: string; profile?: UserProfile }> {
+  ): Promise<{ success: boolean; error?: string; isUnconfirmed?: boolean; profile?: UserProfile }> {
     const cleanEmail = (email || '').trim().toLowerCase();
     if (!cleanEmail || !password) {
       return { success: false, error: 'Email and password are required.' };
@@ -411,6 +472,14 @@ class AuthService {
       });
 
       if (signInErr) {
+        const errMsg = (signInErr.message || '').toLowerCase();
+        if (errMsg.includes('email not confirmed')) {
+          return {
+            success: false,
+            isUnconfirmed: true,
+            error: 'Your email address has not been confirmed yet. Please check your inbox or request a new confirmation email.',
+          };
+        }
         return { success: false, error: signInErr.message };
       }
 
@@ -456,7 +525,7 @@ class AuthService {
   /**
    * Patient Account Creation with Email, Password, Name, and Phone.
    * Enforces role = 'elderly' and creates profile in Supabase.
-   * Includes rate-limit fallback and direct-login if email already exists.
+   * Prevents duplicate requests, does NOT auto-retry on rate limits, and preserves accounts.
    */
   public async signUpPatientWithEmail(
     email: string,
@@ -467,10 +536,11 @@ class AuthService {
       isAyushman?: boolean;
       ayushmanId?: string;
     }
-  ): Promise<{ success: boolean; error?: string; profile?: UserProfile }> {
+  ): Promise<SignUpResult> {
     const cleanEmail = (email || '').trim().toLowerCase();
     const cleanName = (fullName || '').trim();
 
+    // 1. Validate fields
     if (!cleanEmail || !cleanName) {
       return { success: false, error: 'Name and email address are required.' };
     }
@@ -478,8 +548,26 @@ class AuthService {
       return { success: false, error: 'Password must be at least 6 characters.' };
     }
 
+    // 2. Prevent duplicate signup requests caused by double-clicking
+    if (this.isPatientSignUpInFlight) {
+      return { success: false, error: 'A registration request is already in progress. Please wait.' };
+    }
+
+    // 3. Check if user is already authenticated
+    if (this.session && this.currentProfile) {
+      if (this.currentProfile.role === 'elderly' || (this.currentProfile.role as string) === 'patient') {
+        return {
+          success: true,
+          profile: this.currentProfile,
+          message: 'You are already signed in.',
+        };
+      }
+    }
+
     try {
-      // 1. Check if email is already registered
+      this.isPatientSignUpInFlight = true;
+
+      // 4. Pre-check existing profile in database
       const { data: existingProfile } = await supabase
         .from('profiles')
         .select('id, role')
@@ -494,17 +582,15 @@ class AuthService {
           };
         }
         if (existingProfile.role === 'elderly' || (existingProfile.role as string) === 'patient') {
-          // Attempt direct sign in
-          const loginRes = await this.signInPatientWithEmail(cleanEmail, password);
-          if (loginRes.success) return loginRes;
           return {
             success: false,
-            error: 'An account with this email already exists. Please switch to the "Sign In" tab to log in with your password.',
+            isAlreadyRegistered: true,
+            error: 'An account with this email is already registered. Please switch to the "Sign In" tab to log in with your password.',
           };
         }
       }
 
-      // 2. Register with Supabase Auth
+      // 5. Exactly ONE call to Supabase Auth signUp (NO automatic retries!)
       const { data: authData, error: signUpErr } = await supabase.auth.signUp({
         email: cleanEmail,
         password,
@@ -518,19 +604,27 @@ class AuthService {
         },
       });
 
+      // 6. Handle Supabase Auth error strictly without auto-retries
       if (signUpErr) {
         const errMsg = (signUpErr.message || '').toLowerCase();
-        if (errMsg.includes('already registered') || errMsg.includes('rate limit') || errMsg.includes('rate_limit')) {
-          const loginRes = await this.signInPatientWithEmail(cleanEmail, password);
-          if (loginRes.success) return loginRes;
+        const isRateLimit = signUpErr.status === 429 || errMsg.includes('rate limit') || errMsg.includes('rate_limit');
 
-          if (errMsg.includes('rate limit') || errMsg.includes('rate_limit')) {
-            return {
-              success: false,
-              error: 'Email confirmation rate limit exceeded on Supabase mailer (limit: 3/hour). If you already registered, please click the "Sign In" tab. Or click "Continue with Google as Senior / Patient" to sign in instantly without email limits!',
-            };
-          }
+        if (isRateLimit) {
+          return {
+            success: false,
+            isRateLimited: true,
+            error: 'Email confirmation rate limit exceeded on Supabase mailer (limit: 3/hour). If you have already registered, please click the "Sign In" tab. Or click "Continue with Google as Senior / Patient" to sign in instantly without email limits.',
+          };
         }
+
+        if (errMsg.includes('already registered')) {
+          return {
+            success: false,
+            isAlreadyRegistered: true,
+            error: 'An account with this email already exists. Please switch to the "Sign In" tab to log in with your password.',
+          };
+        }
+
         return { success: false, error: signUpErr.message };
       }
 
@@ -539,7 +633,15 @@ class AuthService {
         return { success: false, error: 'Could not create account. Please try again.' };
       }
 
-      // 3. Upsert profile in public.profiles table
+      if (Array.isArray(user.identities) && user.identities.length === 0) {
+        return {
+          success: false,
+          isAlreadyRegistered: true,
+          error: 'An account with this email is already registered. Please switch to the "Sign In" tab to log in.',
+        };
+      }
+
+      // 7. Upsert profile in public.profiles table (preserves account permanently)
       const profileData: any = {
         id: user.id,
         role: 'elderly',
@@ -560,21 +662,29 @@ class AuthService {
         console.warn('[AuthService] Patient profile upsert notice:', upsertErr.message);
       }
 
-      // 4. Sync profile and set active session
+      // 8. Inspect authData.session:
+      // If session exists -> email confirmation disabled; load profile and proceed to patient dashboard
+      // If session is null -> email confirmation enabled; prompt user to check email
       if (authData.session) {
         const synced = await this.syncProfileFromSupabase(user.id, cleanEmail);
-        return { success: true, profile: synced || undefined };
-      } else {
-        const loginRes = await this.signInPatientWithEmail(cleanEmail, password);
-        if (loginRes.success) return loginRes;
         return {
           success: true,
-          error: 'Account created! Please sign in with your email and password.',
+          needsEmailConfirmation: false,
+          profile: synced || undefined,
+        };
+      } else {
+        return {
+          success: true,
+          needsEmailConfirmation: true,
+          email: cleanEmail,
+          message: 'Account created! Please check your email inbox to confirm your account before signing in.',
         };
       }
     } catch (err: any) {
-      console.error('[AuthService] signUpPatientWithEmail error:', err);
+      console.error('[AuthService] signUpPatientWithEmail exception:', err);
       return { success: false, error: err.message || 'Failed to create patient account.' };
+    } finally {
+      this.isPatientSignUpInFlight = false;
     }
   }
 
@@ -585,7 +695,7 @@ class AuthService {
   public async signInPatientWithEmail(
     email: string,
     password: string
-  ): Promise<{ success: boolean; error?: string; profile?: UserProfile }> {
+  ): Promise<{ success: boolean; error?: string; isUnconfirmed?: boolean; profile?: UserProfile }> {
     const cleanEmail = (email || '').trim().toLowerCase();
     if (!cleanEmail || !password) {
       return { success: false, error: 'Email and password are required.' };
@@ -598,6 +708,14 @@ class AuthService {
       });
 
       if (signInErr) {
+        const errMsg = (signInErr.message || '').toLowerCase();
+        if (errMsg.includes('email not confirmed')) {
+          return {
+            success: false,
+            isUnconfirmed: true,
+            error: 'Your email address has not been confirmed yet. Please check your inbox or request a new confirmation email.',
+          };
+        }
         return { success: false, error: signInErr.message };
       }
 
@@ -638,6 +756,76 @@ class AuthService {
       console.error('[AuthService] signInPatientWithEmail error:', err);
       return { success: false, error: err.message || 'Login failed.' };
     }
+  }
+
+  /**
+   * Controlled Resend Confirmation Email with strict 60s cooldown protection.
+   * Prevents repeated/automatic email requests and handles rate limits.
+   */
+  public async resendConfirmationEmail(email: string): Promise<{ success: boolean; error?: string; isRateLimited?: boolean; cooldownRemaining?: number }> {
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (!cleanEmail) {
+      return { success: false, error: 'Email address is required.' };
+    }
+
+    if (this.isResendInFlight) {
+      return { success: false, error: 'A resend request is already in progress. Please wait.' };
+    }
+
+    const now = Date.now();
+    const lastResend = this.lastResendTimestamps[cleanEmail] || 0;
+    const elapsedSeconds = Math.floor((now - lastResend) / 1000);
+    const COOLDOWN_SECONDS = 60;
+
+    if (elapsedSeconds < COOLDOWN_SECONDS) {
+      const remaining = COOLDOWN_SECONDS - elapsedSeconds;
+      return {
+        success: false,
+        cooldownRemaining: remaining,
+        error: `Please wait ${remaining} seconds before requesting another confirmation email.`,
+      };
+    }
+
+    this.isResendInFlight = true;
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: cleanEmail,
+      });
+
+      if (error) {
+        const errMsg = (error.message || '').toLowerCase();
+        const isRateLimit = error.status === 429 || errMsg.includes('rate limit') || errMsg.includes('rate_limit');
+        if (isRateLimit) {
+          return {
+            success: false,
+            isRateLimited: true,
+            error: 'Email confirmation rate limit exceeded (maximum 3 emails/hour). If you have already confirmed your email, please use Sign In. Or sign in instantly with Google.',
+          };
+        }
+        return { success: false, error: error.message };
+      }
+
+      this.lastResendTimestamps[cleanEmail] = Date.now();
+      return { success: true };
+    } catch (err: any) {
+      console.error('[AuthService] resendConfirmationEmail error:', err);
+      return { success: false, error: err.message || 'Failed to resend confirmation email.' };
+    } finally {
+      this.isResendInFlight = false;
+    }
+  }
+
+  /**
+   * Returns remaining cooldown in seconds for resending confirmation emails.
+   */
+  public getResendCooldownRemaining(email: string): number {
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (!cleanEmail) return 0;
+    const lastResend = this.lastResendTimestamps[cleanEmail] || 0;
+    const elapsedSeconds = Math.floor((Date.now() - lastResend) / 1000);
+    const COOLDOWN_SECONDS = 60;
+    return elapsedSeconds < COOLDOWN_SECONDS ? COOLDOWN_SECONDS - elapsedSeconds : 0;
   }
 
   /**
@@ -975,12 +1163,37 @@ class AuthService {
     this.notifyListeners();
   }
 
-  /** Send a password-reset email via Supabase. */
+  /** Send a password-reset email via Supabase with cooldown protection. */
   public async forgotPassword(email: string): Promise<AuthResult> {
+    const cleanEmail = (email || '').trim().toLowerCase();
+    if (!cleanEmail) return { success: false, error: { message: 'Email is required.' } };
+
+    const now = Date.now();
+    const lastTime = this.lastForgotPasswordTimestamps[cleanEmail] || 0;
+    const elapsed = Math.floor((now - lastTime) / 1000);
+    if (elapsed < 60) {
+      return {
+        success: false,
+        error: { message: `Please wait ${60 - elapsed}s before requesting another reset email.` },
+      };
+    }
+
     try {
-      await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase());
-    } catch (e) {
+      const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail);
+      if (error) {
+        const errMsg = (error.message || '').toLowerCase();
+        if (error.status === 429 || errMsg.includes('rate limit') || errMsg.includes('rate_limit')) {
+          return {
+            success: false,
+            error: { message: 'Password reset rate limit exceeded (maximum 3 emails/hour). Please try again later.' },
+          };
+        }
+        return { success: false, error: { message: error.message } };
+      }
+      this.lastForgotPasswordTimestamps[cleanEmail] = Date.now();
+    } catch (e: any) {
       console.warn('[AuthService] resetPasswordForEmail error:', e);
+      return { success: false, error: { message: e.message || 'Failed to send reset email.' } };
     }
     return { success: true };
   }

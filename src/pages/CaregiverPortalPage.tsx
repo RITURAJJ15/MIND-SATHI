@@ -66,10 +66,58 @@ export const CaregiverPortalPage: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [authSubmitting, setAuthSubmitting] = useState(false);
 
+  // Email confirmation & cooldown states
+  const [needsConfirmationNotice, setNeedsConfirmationNotice] = useState(false);
+  const [confirmedEmail, setConfirmedEmail] = useState('');
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendNotice, setResendNotice] = useState('');
+
+  // Countdown timer for resending confirmation emails (does NOT make network calls)
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const interval = setInterval(() => {
+      setResendCooldown((prev) => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [resendCooldown]);
+
+  const handleResendConfirmation = async (targetEmail?: string) => {
+    const emailToUse = (targetEmail || confirmedEmail || authEmail).trim();
+    if (!emailToUse) {
+      setAuthError('Please enter your email address to resend the confirmation.');
+      return;
+    }
+    if (resendCooldown > 0 || resendLoading) return;
+
+    setResendLoading(true);
+    setResendNotice('');
+    setAuthError('');
+    try {
+      const res = await authService.resendConfirmationEmail(emailToUse);
+      if (res.success) {
+        setResendNotice(`Confirmation email re-sent to ${emailToUse}! Please check your inbox.`);
+        setResendCooldown(60);
+      } else {
+        if (res.cooldownRemaining) {
+          setResendCooldown(res.cooldownRemaining);
+        }
+        setAuthError(res.error || 'Failed to resend confirmation email.');
+      }
+    } catch (err: any) {
+      setAuthError(err.message || 'Error resending confirmation email.');
+    } finally {
+      setResendLoading(false);
+    }
+  };
+
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (authSubmitting) return; // Prevent double-clicking
     setAuthError('');
     setAuthSuccess('');
+    setResendNotice('');
+    setNeedsConfirmationNotice(false);
     setAuthSubmitting(true);
 
     try {
@@ -82,12 +130,13 @@ export const CaregiverPortalPage: React.FC = () => {
         );
         if (!res.success) {
           setAuthError(res.error || 'Failed to create caregiver account.');
+        } else if (res.needsEmailConfirmation) {
+          setConfirmedEmail(res.email || authEmail.trim());
+          setNeedsConfirmationNotice(true);
+          setResendCooldown(60);
         } else if (res.profile) {
           setAuthSuccess('Caregiver account created successfully!');
           await refreshAssignedPatients(res.profile.id);
-        } else {
-          setAuthSuccess(res.error || 'Account created! Please sign in with your credentials.');
-          setAuthMode('signin');
         }
       } else {
         const res = await authService.signInCaregiverWithEmail(
@@ -96,6 +145,10 @@ export const CaregiverPortalPage: React.FC = () => {
         );
         if (!res.success) {
           setAuthError(res.error || 'Login failed. Please verify your email and password.');
+          if (res.isUnconfirmed) {
+            setConfirmedEmail(authEmail.trim());
+            setNeedsConfirmationNotice(true);
+          }
         } else if (res.profile) {
           setAuthSuccess('Signed in successfully!');
           await refreshAssignedPatients(res.profile.id);
@@ -296,6 +349,51 @@ export const CaregiverPortalPage: React.FC = () => {
               : 'Sign in to access your linked patient\'s cognitive metrics, daily health summary, and safety alerts.'}
           </p>
 
+          {/* Confirmation Notice Block */}
+          {needsConfirmationNotice && (
+            <div className="p-5 mb-5 bg-sky-50 border border-sky-200 text-sky-900 rounded-2xl text-left space-y-3 animate-in fade-in">
+              <div className="flex items-start gap-2.5">
+                <Mail className="w-5 h-5 text-sky-600 shrink-0 mt-0.5" />
+                <div>
+                  <h3 className="text-sm font-extrabold text-sky-900">Check your email to confirm your account</h3>
+                  <p className="text-xs text-sky-700 mt-1 leading-relaxed">
+                    We sent a confirmation link to <strong className="text-sky-950">{confirmedEmail || authEmail}</strong>. Please check your inbox (and spam/junk folder) and click the link to activate your Caregiver account.
+                  </p>
+                </div>
+              </div>
+
+              {resendNotice && (
+                <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>{resendNotice}</span>
+                </div>
+              )}
+
+              <div className="pt-2 border-t border-sky-200 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  disabled={resendCooldown > 0 || resendLoading}
+                  onClick={() => handleResendConfirmation()}
+                  className="px-3 py-1.5 bg-sky-600 hover:bg-sky-700 disabled:bg-sky-300 text-white text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
+                >
+                  {resendLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mail className="w-3.5 h-3.5" />}
+                  <span>{resendCooldown > 0 ? `Resend email in (${resendCooldown}s)` : 'Resend confirmation email'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('signin');
+                    setNeedsConfirmationNotice(false);
+                    setAuthError('');
+                  }}
+                  className="px-3 py-1.5 bg-white border border-sky-300 hover:bg-sky-100 text-sky-800 text-xs font-bold rounded-xl transition-all cursor-pointer shadow-xs"
+                >
+                  Already confirmed? Sign In
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Error / Success Banners */}
           {authError && (
             <div className="p-4 mb-5 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold rounded-2xl text-left space-y-2 animate-in fade-in">
@@ -303,17 +401,25 @@ export const CaregiverPortalPage: React.FC = () => {
                 <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
                 <span className="leading-relaxed">{authError}</span>
               </div>
-              {authError.toLowerCase().includes('rate limit') && (
-                <div className="pt-2 border-t border-rose-200 flex flex-wrap gap-2">
+              <div className="pt-2 border-t border-rose-200 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setAuthMode('signin'); setAuthError(''); }}
+                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer shadow-xs"
+                >
+                  Switch to Sign In Tab
+                </button>
+                {authError.toLowerCase().includes('confirm') && (
                   <button
                     type="button"
-                    onClick={() => { setAuthMode('signin'); setAuthError(''); }}
+                    disabled={resendCooldown > 0 || resendLoading}
+                    onClick={() => handleResendConfirmation()}
                     className="px-3 py-1.5 bg-white border border-rose-300 hover:bg-rose-100 text-rose-800 font-bold rounded-xl text-xs transition-colors cursor-pointer shadow-xs"
                   >
-                    Switch to Sign In Tab
+                    {resendCooldown > 0 ? `Resend available in (${resendCooldown}s)` : 'Resend Confirmation Email'}
                   </button>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           )}
 

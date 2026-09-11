@@ -45,10 +45,58 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [globalError, setGlobalError] = useState('');
   const [globalSuccess, setGlobalSuccess] = useState('');
 
+  // Email confirmation & cooldown states
+  const [needsConfirmationNotice, setNeedsConfirmationNotice] = useState(false);
+  const [confirmedEmail, setConfirmedEmail] = useState('');
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendNotice, setResendNotice] = useState('');
+
+  // Countdown timer for resending confirmation emails (strictly client-side, does NOT make network calls)
+  React.useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const interval = setInterval(() => {
+      setResendCooldown((prev) => (prev <= 1 ? 0 : prev - 1));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [resendCooldown]);
+
+  const handleResendConfirmation = async (targetEmail?: string) => {
+    const emailToUse = (targetEmail || confirmedEmail || email).trim();
+    if (!emailToUse) {
+      setGlobalError('Please enter your email address to resend confirmation.');
+      return;
+    }
+    if (resendCooldown > 0 || resendLoading) return;
+
+    setResendLoading(true);
+    setResendNotice('');
+    setGlobalError('');
+    try {
+      const res = await authService.resendConfirmationEmail(emailToUse);
+      if (res.success) {
+        setResendNotice(`Confirmation email re-sent to ${emailToUse}! Please check your inbox.`);
+        setResendCooldown(60);
+      } else {
+        if (res.cooldownRemaining) {
+          setResendCooldown(res.cooldownRemaining);
+        }
+        setGlobalError(res.error || 'Failed to resend confirmation email.');
+      }
+    } catch (err: any) {
+      setGlobalError(err.message || 'Error sending confirmation email.');
+    } finally {
+      setResendLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return; // Prevent double-clicking
     setGlobalError('');
     setGlobalSuccess('');
+    setResendNotice('');
+    setNeedsConfirmationNotice(false);
     setIsSubmitting(true);
 
     try {
@@ -66,18 +114,23 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
 
         if (!res.success) {
           setGlobalError(res.error || 'Failed to create patient account.');
+        } else if (res.needsEmailConfirmation) {
+          setConfirmedEmail(res.email || email.trim());
+          setNeedsConfirmationNotice(true);
+          setResendCooldown(60);
         } else if (res.profile) {
           setGlobalSuccess('Account created successfully! Redirecting to Patient Dashboard...');
           if (onLoginSuccess) onLoginSuccess('elderly');
           setTimeout(() => navigate('/patient/dashboard', true), 600);
-        } else {
-          setGlobalSuccess(res.error || 'Account created! Please sign in with your credentials.');
-          setAuthMode('signin');
         }
       } else {
         const res = await authService.signInPatientWithEmail(email.trim(), password);
         if (!res.success) {
           setGlobalError(res.error || 'Login failed. Please verify your email and password.');
+          if (res.isUnconfirmed) {
+            setConfirmedEmail(email.trim());
+            setNeedsConfirmationNotice(true);
+          }
         } else if (res.profile) {
           setGlobalSuccess('Signed in successfully! Opening Patient Dashboard...');
           if (onLoginSuccess) onLoginSuccess('elderly');
@@ -108,27 +161,80 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
         </p>
       </div>
 
+      {/* Confirmation Notice Block */}
+      {needsConfirmationNotice && (
+        <div className="p-5 mb-5 bg-amber-50 border border-amber-200 text-amber-900 rounded-2xl text-left space-y-3 animate-in fade-in">
+          <div className="flex items-start gap-2.5">
+            <Mail className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+            <div>
+              <h3 className="text-sm font-extrabold text-amber-950">Check your email to confirm your account</h3>
+              <p className="text-xs text-amber-800 mt-1 leading-relaxed">
+                We sent a confirmation link to <strong className="text-amber-950">{confirmedEmail || email}</strong>. Please check your inbox (and spam/junk folder) and click the link to activate your account.
+              </p>
+            </div>
+          </div>
+
+          {resendNotice && (
+            <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{resendNotice}</span>
+            </div>
+          )}
+
+          <div className="pt-2 border-t border-amber-200 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={resendCooldown > 0 || resendLoading}
+              onClick={() => handleResendConfirmation()}
+              className="px-3 py-1.5 bg-sathi-600 hover:bg-sathi-700 disabled:bg-sathi-300 text-white text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
+            >
+              {resendLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mail className="w-3.5 h-3.5" />}
+              <span>{resendCooldown > 0 ? `Resend email in (${resendCooldown}s)` : 'Resend confirmation email'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAuthMode('signin');
+                setNeedsConfirmationNotice(false);
+                setGlobalError('');
+              }}
+              className="px-3 py-1.5 bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 text-xs font-bold rounded-xl transition-all cursor-pointer shadow-xs"
+            >
+              Already confirmed? Sign In
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Error & Success Alerts */}
       {globalError && (
         <div role="alert" aria-live="assertive" className="mb-5 flex flex-col gap-2 rounded-2xl bg-rose-50 border border-rose-200 p-4 text-left">
           <div className="flex items-start gap-2.5">
             <AlertCircle className="w-4 h-4 text-rose-600 mt-0.5 shrink-0" />
-            <p className="text-xs font-semibold text-rose-800">{globalError}</p>
+            <p className="text-xs font-semibold text-rose-800 leading-relaxed">{globalError}</p>
           </div>
-          {globalError.toLowerCase().includes('rate limit') && (
-            <div className="pt-2 border-t border-rose-200/80 flex flex-wrap gap-2">
+          <div className="pt-2 border-t border-rose-200 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setAuthMode('signin');
+                setGlobalError('');
+              }}
+              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl transition-colors cursor-pointer shadow-xs"
+            >
+              Switch to Sign In Tab
+            </button>
+            {globalError.toLowerCase().includes('confirm') && (
               <button
                 type="button"
-                onClick={() => {
-                  setAuthMode('signin');
-                  setGlobalError('');
-                }}
-                className="px-3 py-1.5 bg-rose-600 text-white text-xs font-bold rounded-lg hover:bg-rose-700 transition-colors cursor-pointer"
+                disabled={resendCooldown > 0 || resendLoading}
+                onClick={() => handleResendConfirmation()}
+                className="px-3 py-1.5 bg-white border border-rose-300 hover:bg-rose-100 text-rose-800 font-bold rounded-xl text-xs transition-colors cursor-pointer shadow-xs"
               >
-                Switch to Sign In Tab
+                {resendCooldown > 0 ? `Resend available in (${resendCooldown}s)` : 'Resend Confirmation Email'}
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
 
