@@ -18,8 +18,8 @@ export interface SupabaseStorageAdapter {
 
 class TabStorageEngine implements SupabaseStorageAdapter {
   private getRoleFromUrlOrStorage(): 'caregiver' | 'elderly' | 'clinician' | null {
-    const path = window.location.pathname || '';
-    if (path.includes('caregiver')) return 'caregiver';
+    const pathname = window.location.pathname || '';
+    if (pathname.includes('caregiver')) return 'caregiver';
 
     const hash = window.location.hash || '';
     if (hash.includes('/caregiver/')) return 'caregiver';

@@ -298,9 +298,22 @@ export const CaregiverPortalPage: React.FC = () => {
 
           {/* Error / Success Banners */}
           {authError && (
-            <div className="p-3.5 mb-5 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-bold rounded-2xl flex items-center gap-2 text-left animate-in fade-in">
-              <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
-              <span>{authError}</span>
+            <div className="p-4 mb-5 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold rounded-2xl text-left space-y-2 animate-in fade-in">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-rose-600 mt-0.5" />
+                <span className="leading-relaxed">{authError}</span>
+              </div>
+              {authError.toLowerCase().includes('rate limit') && (
+                <div className="pt-2 border-t border-rose-200 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => { setAuthMode('signin'); setAuthError(''); }}
+                    className="px-3 py-1.5 bg-white border border-rose-300 hover:bg-rose-100 text-rose-800 font-bold rounded-xl text-xs transition-colors cursor-pointer shadow-xs"
+                  >
+                    Switch to Sign In Tab
+                  </button>
+                </div>
+              )}
             </div>
           )}
 

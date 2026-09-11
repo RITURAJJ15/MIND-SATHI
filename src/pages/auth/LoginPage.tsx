@@ -30,7 +30,7 @@ interface LoginPageProps {
 export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
   const [selectedRole, setSelectedRole] = useState<UserRole>('elderly');
   const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
-  
+
   // Patient Form Fields
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -110,9 +110,25 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
 
       {/* Error & Success Alerts */}
       {globalError && (
-        <div role="alert" aria-live="assertive" className="mb-5 flex items-start gap-2.5 rounded-2xl bg-rose-50 border border-rose-200 px-4 py-3 text-left">
-          <AlertCircle className="w-4 h-4 text-rose-600 mt-0.5 shrink-0" />
-          <p className="text-xs font-semibold text-rose-800">{globalError}</p>
+        <div role="alert" aria-live="assertive" className="mb-5 flex flex-col gap-2 rounded-2xl bg-rose-50 border border-rose-200 p-4 text-left">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="w-4 h-4 text-rose-600 mt-0.5 shrink-0" />
+            <p className="text-xs font-semibold text-rose-800">{globalError}</p>
+          </div>
+          {globalError.toLowerCase().includes('rate limit') && (
+            <div className="pt-2 border-t border-rose-200/80 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode('signin');
+                  setGlobalError('');
+                }}
+                className="px-3 py-1.5 bg-rose-600 text-white text-xs font-bold rounded-lg hover:bg-rose-700 transition-colors cursor-pointer"
+              >
+                Switch to Sign In Tab
+              </button>
+            </div>
+          )}
         </div>
       )}
 

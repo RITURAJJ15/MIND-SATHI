@@ -294,18 +294,29 @@ class AuthService {
     }
 
     try {
-      // 1. Check if email is already registered as an elderly patient
+      // 1. Check if email is already registered in profiles
       const { data: existingProfile } = await supabase
         .from('profiles')
         .select('id, role')
         .ilike('email', cleanEmail)
         .maybeSingle();
 
-      if (existingProfile && (existingProfile.role === 'elderly' || (existingProfile.role as string) === 'patient')) {
-        return {
-          success: false,
-          error: 'This email is already registered as an Elderly Patient. Caregivers must use a different email address.',
-        };
+      if (existingProfile) {
+        if (existingProfile.role === 'elderly' || (existingProfile.role as string) === 'patient') {
+          return {
+            success: false,
+            error: 'This email is already registered as an Elderly Patient. Caregivers must use a different email address.',
+          };
+        }
+        if (existingProfile.role === 'caregiver') {
+          // Account already exists — try logging in immediately!
+          const loginRes = await this.signInCaregiverWithEmail(cleanEmail, password);
+          if (loginRes.success) return loginRes;
+          return {
+            success: false,
+            error: 'An account with this email already exists. Please switch to the "Sign In" tab to log in with your password.',
+          };
+        }
       }
 
       // 2. Register with Supabase Auth
@@ -323,8 +334,18 @@ class AuthService {
       });
 
       if (signUpErr) {
-        if (signUpErr.message?.toLowerCase().includes('already registered')) {
-          return await this.signInCaregiverWithEmail(cleanEmail, password);
+        const errMsg = (signUpErr.message || '').toLowerCase();
+        if (errMsg.includes('already registered') || errMsg.includes('rate limit') || errMsg.includes('rate_limit')) {
+          // Attempt login immediately in case user was already created
+          const loginRes = await this.signInCaregiverWithEmail(cleanEmail, password);
+          if (loginRes.success) return loginRes;
+
+          if (errMsg.includes('rate limit') || errMsg.includes('rate_limit')) {
+            return {
+              success: false,
+              error: 'Email confirmation rate limit exceeded on Supabase mailer (limit: 3/hour). If you have already registered, please click the "Sign In" tab. Or click "Continue with Google as Caregiver" to sign in instantly without email limits!',
+            };
+          }
         }
         return { success: false, error: signUpErr.message };
       }
@@ -434,7 +455,8 @@ class AuthService {
 
   /**
    * Patient Account Creation with Email, Password, Name, and Phone.
-   * Enforces role = 'elderly' and creates/updates profile in Supabase profiles table.
+   * Enforces role = 'elderly' and creates profile in Supabase.
+   * Includes rate-limit fallback and direct-login if email already exists.
    */
   public async signUpPatientWithEmail(
     email: string,
@@ -457,18 +479,29 @@ class AuthService {
     }
 
     try {
-      // 1. Check if email is already registered as a Caregiver
+      // 1. Check if email is already registered
       const { data: existingProfile } = await supabase
         .from('profiles')
         .select('id, role')
         .ilike('email', cleanEmail)
         .maybeSingle();
 
-      if (existingProfile && existingProfile.role === 'caregiver') {
-        return {
-          success: false,
-          error: 'This email is already registered as a Caregiver. Patients must use a different email address.',
-        };
+      if (existingProfile) {
+        if (existingProfile.role === 'caregiver') {
+          return {
+            success: false,
+            error: 'This email is already registered as a Caregiver. Patients must use a different email address.',
+          };
+        }
+        if (existingProfile.role === 'elderly' || (existingProfile.role as string) === 'patient') {
+          // Attempt direct sign in
+          const loginRes = await this.signInPatientWithEmail(cleanEmail, password);
+          if (loginRes.success) return loginRes;
+          return {
+            success: false,
+            error: 'An account with this email already exists. Please switch to the "Sign In" tab to log in with your password.',
+          };
+        }
       }
 
       // 2. Register with Supabase Auth
@@ -486,8 +519,17 @@ class AuthService {
       });
 
       if (signUpErr) {
-        if (signUpErr.message?.toLowerCase().includes('already registered')) {
-          return await this.signInPatientWithEmail(cleanEmail, password);
+        const errMsg = (signUpErr.message || '').toLowerCase();
+        if (errMsg.includes('already registered') || errMsg.includes('rate limit') || errMsg.includes('rate_limit')) {
+          const loginRes = await this.signInPatientWithEmail(cleanEmail, password);
+          if (loginRes.success) return loginRes;
+
+          if (errMsg.includes('rate limit') || errMsg.includes('rate_limit')) {
+            return {
+              success: false,
+              error: 'Email confirmation rate limit exceeded on Supabase mailer (limit: 3/hour). If you already registered, please click the "Sign In" tab. Or click "Continue with Google as Senior / Patient" to sign in instantly without email limits!',
+            };
+          }
         }
         return { success: false, error: signUpErr.message };
       }
@@ -600,61 +642,110 @@ class AuthService {
 
   /**
    * Dedicated handler for processing the OAuth callback route.
-   * Extracts user, profile, verifies role, and returns the target route.
+   * Extracts tokens from URL, sets Supabase session, verifies role, and returns the target route.
    */
   public async handleOAuthCallback(): Promise<string> {
     try {
-      // 1. Wait for Supabase to resolve the session from URL
-      let authUser = (await supabase.auth.getUser()).data?.user;
-      if (!authUser) {
-        await new Promise((r) => setTimeout(r, 400));
-        authUser = (await supabase.auth.getUser()).data?.user;
+      const hash = window.location.hash || '';
+      const search = window.location.search || '';
+
+      // Check for error from OAuth provider
+      if (hash.includes('error=') || search.includes('error=')) {
+        const errMatch = (hash + '&' + search).match(/error_description=([^&]+)/);
+        const errText = errMatch ? decodeURIComponent(errMatch[1].replace(/\+/g, ' ')) : 'OAuth authentication failed.';
+        throw new Error(errText);
+      }
+
+      // 1. Manually extract access_token and refresh_token from hash or search
+      let accessToken: string | null = null;
+      let refreshToken: string | null = null;
+
+      const atMatch = (hash + '&' + search).match(/access_token=([^&]+)/);
+      const rtMatch = (hash + '&' + search).match(/refresh_token=([^&]+)/);
+      if (atMatch) accessToken = decodeURIComponent(atMatch[1]);
+      if (rtMatch) refreshToken = decodeURIComponent(rtMatch[1]);
+
+      // If PKCE code exists in search query parameters
+      const codeMatch = (search + '&' + hash).match(/[?&]code=([^&]+)/);
+      if (codeMatch && !accessToken) {
+        const code = decodeURIComponent(codeMatch[1]);
+        try {
+          await supabase.auth.exchangeCodeForSession(code);
+        } catch (codeErr) {
+          console.warn('[AuthService] exchangeCodeForSession notice:', codeErr);
+        }
+      }
+
+      // If access_token was extracted, explicitly establish the session in Supabase Auth
+      if (accessToken && refreshToken) {
+        try {
+          await supabase.auth.setSession({
+            access_token: accessToken,
+            refresh_token: refreshToken,
+          });
+        } catch (setErr) {
+          console.warn('[AuthService] setSession notice:', setErr);
+        }
+      }
+
+      // 2. Poll Supabase for user session (up to 3 seconds)
+      let authUser: any = null;
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const { data: userData } = await supabase.auth.getUser();
+        if (userData?.user) {
+          authUser = userData.user;
+          break;
+        }
+        const { data: sessData } = await supabase.auth.getSession();
+        if (sessData?.session?.user) {
+          authUser = sessData.session.user;
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 250));
       }
 
       if (!authUser || !authUser.id) {
         console.warn('[AuthService] handleOAuthCallback: No authenticated Supabase user found.');
-        return '/patient/auth';
+        throw new Error('Could not establish an authenticated Google session. Please try signing in again.');
       }
 
       const userId = authUser.id;
       const email = authUser.email || '';
 
-      // Development debug logging
       if (import.meta.env.DEV) {
         console.log('--- AUTH DEBUG LOG ---');
         console.log('AUTH USER ID:', userId);
         console.log('AUTH EMAIL:', email);
         console.log('CURRENT PATH:', window.location.pathname);
         console.log('CURRENT HASH:', window.location.hash);
-        console.log('OAUTH CALLBACK: /auth/callback');
       }
 
-      const profile = await this.syncProfileFromSupabase(userId, email);
-      const role = profile?.role || this.currentProfile?.role;
+      // Determine intended role from session/local storage or metadata
+      const storedIntended = sessionStorage.getItem('ms_intended_role') ||
+        localStorage.getItem('ms_pending_oauth_role') ||
+        authUser.user_metadata?.role;
+      const intendedRole: UserRole = (storedIntended === 'caregiver' || storedIntended === 'clinician')
+        ? storedIntended
+        : 'elderly';
 
-      if (import.meta.env.DEV) {
-        console.log('PROFILE ROLE:', role);
+      // 3. Synchronize profile from Supabase or complete for new user
+      let profile = await this.syncProfileFromSupabase(userId, email);
+      if (!profile) {
+        profile = await this.completeGoogleProfile(intendedRole);
       }
 
-      if (role === 'caregiver') {
-        if (import.meta.env.DEV) console.log('REDIRECT TARGET: /caregiver/dashboard');
+      const finalRole = profile?.role || intendedRole;
+
+      if (finalRole === 'caregiver') {
         return '/caregiver/dashboard';
-      } else if (role === 'elderly' || (role as string) === 'patient') {
-        if (import.meta.env.DEV) console.log('REDIRECT TARGET: /patient/dashboard');
-        return '/patient/dashboard';
-      } else if (role === 'clinician' || (role as string) === 'doctor') {
-        if (import.meta.env.DEV) console.log('REDIRECT TARGET: /doctor/dashboard');
+      } else if (finalRole === 'clinician' || (finalRole as string) === 'doctor') {
         return '/doctor/dashboard';
+      } else {
+        return '/patient/dashboard';
       }
-
-      const pendingRole = sessionStorage.getItem('ms_intended_role') || localStorage.getItem('ms_pending_oauth_role');
-      if (pendingRole === 'caregiver') {
-        return '/caregiver/dashboard';
-      }
-      return '/patient/dashboard';
-    } catch (err) {
+    } catch (err: any) {
       console.error('[AuthService] handleOAuthCallback exception:', err);
-      return '/';
+      throw err;
     }
   }
 
@@ -785,9 +876,7 @@ class AuthService {
             this.connectedPatient = null;
             localStorage.removeItem(SK_SESSION);
             this.notifyListeners();
-            alert(`This Google account (${email}) is already registered as a Patient. Please use a different Google account for the Caregiver account.`);
-            window.location.hash = '#/caregiver/auth';
-            return null;
+            throw new Error(`This Google account (${email}) is already registered as a Patient. Caregivers must sign in with a different Google account.`);
           }
           if ((pendingOauthRole === 'elderly' || (pendingOauthRole as string) === 'patient') && mapped.role === 'caregiver') {
             await supabase.auth.signOut();
@@ -796,9 +885,7 @@ class AuthService {
             this.connectedPatient = null;
             localStorage.removeItem(SK_SESSION);
             this.notifyListeners();
-            alert(`This Google account (${email}) is registered as a Caregiver. Please use a different Google account or sign in through the Caregiver Portal.`);
-            window.location.hash = '#/patient/auth';
-            return null;
+            throw new Error(`This Google account (${email}) is registered as a Caregiver. Patients must sign in with a different Google account.`);
           }
         }
 
@@ -841,9 +928,7 @@ class AuthService {
             this.currentProfile = null;
             localStorage.removeItem(SK_SESSION);
             this.notifyListeners();
-            alert(`This Google account (${normalizedEmail}) is already registered as a Patient. A Caregiver must use a separate Google account with a different email address.`);
-            window.location.hash = '#/caregiver/auth';
-            return null;
+            throw new Error(`This Google account (${normalizedEmail}) is already registered as a Patient. A Caregiver must use a separate Google account with a different email address.`);
           }
           if ((pendingRole === 'elderly' || (pendingRole as string) === 'patient') && existingEmailProfile.role === 'caregiver') {
             localStorage.removeItem('ms_pending_oauth_role');
@@ -853,25 +938,15 @@ class AuthService {
             this.currentProfile = null;
             localStorage.removeItem(SK_SESSION);
             this.notifyListeners();
-            alert(`This Google account (${normalizedEmail}) is registered as a Caregiver. Please use the Caregiver Portal to sign in.`);
-            window.location.hash = '#/patient/auth';
-            return null;
+            throw new Error(`This Google account (${normalizedEmail}) is registered as a Caregiver. Patients must sign in with a different Google account.`);
           }
         }
       }
 
-      if (pendingRole) {
-        localStorage.removeItem('ms_pending_oauth_role');
-        sessionStorage.removeItem('ms_pending_oauth_role');
-        return await this.completeGoogleProfile(pendingRole);
-      }
-
-      // New Google User without preselected role: Prompt for role selection
-      this.pendingGoogleUser = authUser || { id: userId, email: normalizedEmail, user_metadata: metadata };
-      this.needsRoleSelection = true;
-      this.currentProfile = null;
-      this.notifyListeners();
-      return null;
+      const assignedRole: UserRole = pendingRole || 'elderly';
+      localStorage.removeItem('ms_pending_oauth_role');
+      sessionStorage.removeItem('ms_pending_oauth_role');
+      return await this.completeGoogleProfile(assignedRole);
     } catch (err) {
       console.error('[AuthService] Error in syncProfileFromSupabase:', err);
     }
