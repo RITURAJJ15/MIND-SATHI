@@ -7,16 +7,24 @@ import {
 } from 'lucide-react';
 import { GoogleSignInButton } from '../../components/common/GoogleSignInButton';
 import { type AuthRole } from '../../types/auth';
+import { navigate } from '../../router';
 
 interface CaregiverAuthPageProps {
-  onBackToLanding: () => void;
-  onSuccess: (role: AuthRole) => void;
+  onBackToLanding?: () => void;
+  onSuccess?: (role: AuthRole) => void;
 }
 
 export const CaregiverAuthPage: React.FC<CaregiverAuthPageProps> = ({
   onBackToLanding,
 }) => {
   const [error, setError] = useState('');
+
+  const handleBack = () => {
+    if (onBackToLanding) {
+      onBackToLanding();
+    }
+    navigate('/');
+  };
 
   return (
     <div className="min-h-screen bg-[#F0FDF4] flex flex-col font-sans">
@@ -25,7 +33,7 @@ export const CaregiverAuthPage: React.FC<CaregiverAuthPageProps> = ({
         <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           <button
             type="button"
-            onClick={onBackToLanding}
+            onClick={handleBack}
             className="flex items-center gap-2 text-sm font-bold text-gray-600 hover:text-emerald-800 transition-colors cursor-pointer group"
           >
             <ArrowLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform text-emerald-600" />
@@ -59,7 +67,7 @@ export const CaregiverAuthPage: React.FC<CaregiverAuthPageProps> = ({
             </div>
 
             <h1 className="text-2xl sm:text-3xl font-black text-gray-900 tracking-tight">
-              Caregiver Portal
+              Caregiver Login
             </h1>
             <p className="text-xs sm:text-sm text-gray-500 mt-1 mb-6">
               Dedicated portal for compassionate family oversight, cognitive telemetry, and safety updates.

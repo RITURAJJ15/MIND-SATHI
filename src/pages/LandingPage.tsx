@@ -27,9 +27,10 @@ import {
   BookOpen,
 } from 'lucide-react';
 import type { AuthRole } from '../types/auth';
+import { navigate } from '../router';
 
 interface LandingPageProps {
-  onEnterApp: (screen?: 'login' | 'register' | 'caregiver-auth', role?: AuthRole) => void;
+  onEnterApp?: (screen?: 'login' | 'register' | 'caregiver-auth', role?: AuthRole) => void;
   onCaregiverSuccess?: () => void;
 }
 
@@ -237,6 +238,15 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
   const [scrolled, setScrolled] = useState(false);
   const [activeGame, setActiveGame] = useState<string | null>(null);
 
+  const handleEnter = (screen?: 'login' | 'register' | 'caregiver-auth', role?: AuthRole) => {
+    if (screen === 'caregiver-auth' || role === 'caregiver') {
+      navigate('/caregiver/auth');
+    } else {
+      navigate('/patient/auth');
+    }
+    onEnterApp?.(screen, role);
+  };
+
   useEffect(() => {
     const handler = () => setScrolled(window.scrollY > 60);
     window.addEventListener('scroll', handler, { passive: true });
@@ -281,7 +291,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
             {/* CTA Buttons */}
             <div className="hidden lg:flex items-center gap-2.5">
               <button
-                onClick={() => onEnterApp('caregiver-auth', 'caregiver')}
+                onClick={() => handleEnter('caregiver-auth', 'caregiver')}
                 type="button"
                 id="nav-caregiver-btn"
                 className="px-4 py-2.5 rounded-xl text-sm font-bold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border-2 border-emerald-300 transition-all cursor-pointer flex items-center gap-1.5 shadow-sm hover:shadow"
@@ -289,10 +299,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
                 <UserCheck className="w-4 h-4 text-emerald-600" />
                 <span>Caregiver Portal</span>
               </button>
-              <button onClick={() => onEnterApp('login')} type="button" id="nav-login-btn" className="px-5 py-2.5 rounded-xl text-sm font-bold text-sathi-700 border-2 border-sathi-300 hover:bg-sathi-50 transition-all cursor-pointer">
+              <button onClick={() => handleEnter('login')} type="button" id="nav-login-btn" className="px-5 py-2.5 rounded-xl text-sm font-bold text-sathi-700 border-2 border-sathi-300 hover:bg-sathi-50 transition-all cursor-pointer">
                 Login
               </button>
-              <button onClick={() => onEnterApp('register')} type="button" id="nav-get-started-btn" className="px-5 py-2.5 rounded-xl text-sm font-bold text-white bg-gradient-to-r from-sathi-600 to-amber-600 hover:from-sathi-700 hover:to-amber-700 shadow-lg hover:shadow-xl transition-all cursor-pointer">
+              <button onClick={() => handleEnter('register')} type="button" id="nav-get-started-btn" className="px-5 py-2.5 rounded-xl text-sm font-bold text-white bg-gradient-to-r from-sathi-600 to-amber-600 hover:from-sathi-700 hover:to-amber-700 shadow-lg hover:shadow-xl transition-all cursor-pointer">
                 Get Started
               </button>
             </div>
@@ -314,7 +324,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
             ))}
             <div className="pt-2">
               <button
-                onClick={() => { onEnterApp('caregiver-auth', 'caregiver'); setMobileMenuOpen(false); }}
+                onClick={() => { handleEnter('caregiver-auth', 'caregiver'); setMobileMenuOpen(false); }}
                 type="button"
                 className="w-full py-3 px-4 rounded-xl font-extrabold text-sm text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border-2 border-emerald-300 flex items-center justify-center gap-2 cursor-pointer shadow-xs"
               >
@@ -323,8 +333,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
               </button>
             </div>
             <div className="flex gap-3 pt-2 border-t border-gray-100">
-              <button onClick={() => onEnterApp('login')} type="button" className="flex-1 py-3 rounded-xl font-bold border-2 border-sathi-300 text-sathi-700 hover:bg-sathi-50 cursor-pointer">Login</button>
-              <button onClick={() => onEnterApp('register')} type="button" className="flex-1 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-sathi-600 to-amber-600 cursor-pointer">Get Started</button>
+              <button onClick={() => handleEnter('login')} type="button" className="flex-1 py-3 rounded-xl font-bold border-2 border-sathi-300 text-sathi-700 hover:bg-sathi-50 cursor-pointer">Login</button>
+              <button onClick={() => handleEnter('register')} type="button" className="flex-1 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-sathi-600 to-amber-600 cursor-pointer">Get Started</button>
             </div>
           </div>
         )}
@@ -357,11 +367,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
               </p>
               <p className="mt-2 text-sm text-sathi-700 font-bold italic indic-text">"खेलो। सोचो। साथ बढ़ो।"</p>
               <div className="mt-8 flex flex-col sm:flex-row gap-4 justify-center lg:justify-start">
-                <button onClick={() => onEnterApp('login')} type="button" id="hero-cta-primary" className="group flex items-center justify-center gap-2 px-8 py-4 rounded-2xl text-base font-extrabold text-white bg-gradient-to-r from-sathi-600 to-amber-600 hover:from-sathi-700 hover:to-amber-700 shadow-xl hover:shadow-2xl hover:scale-105 transition-all cursor-pointer">
+                <button onClick={() => handleEnter('login')} type="button" id="hero-cta-primary" className="group flex items-center justify-center gap-2 px-8 py-4 rounded-2xl text-base font-extrabold text-white bg-gradient-to-r from-sathi-600 to-amber-600 hover:from-sathi-700 hover:to-amber-700 shadow-xl hover:shadow-2xl hover:scale-105 transition-all cursor-pointer">
                   <span>Sign In / Enter Dashboard</span>
                   <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                 </button>
-                <button onClick={() => onEnterApp('register')} type="button" id="hero-cta-secondary" className="flex items-center justify-center gap-2 px-6 py-4 rounded-2xl text-base font-bold text-gray-800 bg-white hover:bg-gray-50 border-2 border-gray-200 shadow-md hover:shadow-lg transition-all cursor-pointer">
+                <button onClick={() => handleEnter('register')} type="button" id="hero-cta-secondary" className="flex items-center justify-center gap-2 px-6 py-4 rounded-2xl text-base font-bold text-gray-800 bg-white hover:bg-gray-50 border-2 border-gray-200 shadow-md hover:shadow-lg transition-all cursor-pointer">
                   <span>Create Account</span>
                 </button>
               </div>
@@ -375,7 +385,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
               <div className="mt-5 flex items-center gap-2.5 justify-center lg:justify-start flex-wrap">
                 <span className="text-xs text-gray-600 font-semibold">Are you a family caregiver?</span>
                 <button
-                  onClick={() => onEnterApp('caregiver-auth', 'caregiver')}
+                  onClick={() => handleEnter('caregiver-auth', 'caregiver')}
                   type="button"
                   id="hero-caregiver-cta"
                   className="text-xs font-black text-emerald-800 hover:text-emerald-950 bg-emerald-50 hover:bg-emerald-100 px-3.5 py-1.5 rounded-xl border border-emerald-300 flex items-center gap-1.5 transition-all cursor-pointer shadow-xs"
@@ -387,7 +397,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
               </div>
             </div>
             {/* Illustration */}
-            <HeroIllustration onEnterApp={onEnterApp} />
+            <HeroIllustration onEnterApp={() => handleEnter('login')} />
           </div>
           <div className="flex flex-col items-center mt-16 gap-2 animate-bounce">
             <span className="text-xs font-semibold text-gray-400 uppercase tracking-widest">Explore More</span>
@@ -467,7 +477,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
                     className={`relative overflow-hidden rounded-3xl border-2 p-6 sm:p-7 cursor-pointer transition-all duration-300 ${game.bg} ${game.border} ${isHovered ? 'shadow-elder-hover scale-[1.02]' : 'shadow-elder hover:shadow-elder-hover hover:scale-[1.01]'}`}
                     onMouseEnter={() => setActiveGame(game.id)}
                     onMouseLeave={() => setActiveGame(null)}
-                    onClick={() => onEnterApp('login')}
+                    onClick={() => handleEnter('login')}
                     id={`game-card-${game.id}`}
                   >
                     <div className="absolute -right-4 -top-4 text-7xl opacity-10 select-none pointer-events-none">{game.emoji}</div>
@@ -489,7 +499,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
             })}
           </div>
           <FadeUp className="text-center mt-12">
-            <button onClick={() => onEnterApp('login')} type="button" id="games-cta-btn" className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl text-base font-extrabold text-white bg-gradient-to-r from-sathi-600 to-amber-600 hover:from-sathi-700 hover:to-amber-700 shadow-xl hover:shadow-2xl hover:scale-105 transition-all cursor-pointer">
+            <button onClick={() => handleEnter('login')} type="button" id="games-cta-btn" className="inline-flex items-center gap-2 px-8 py-4 rounded-2xl text-base font-extrabold text-white bg-gradient-to-r from-sathi-600 to-amber-600 hover:from-sathi-700 hover:to-amber-700 shadow-xl hover:shadow-2xl hover:scale-105 transition-all cursor-pointer">
               <Sparkles className="w-5 h-5" />
               <span>Start Playing Free</span>
             </button>
@@ -537,7 +547,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   {MEMORY_PHOTOS.map((mem) => (
-                    <div key={mem.title} className={`relative rounded-2xl overflow-hidden h-28 sm:h-32 bg-gradient-to-br ${mem.color} shadow-elder hover:shadow-elder-hover transition-all cursor-pointer group`} onClick={() => onEnterApp('login')}>
+                    <div key={mem.title} className={`relative rounded-2xl overflow-hidden h-28 sm:h-32 bg-gradient-to-br ${mem.color} shadow-elder hover:shadow-elder-hover transition-all cursor-pointer group`} onClick={() => handleEnter('login')}>
                       <div className="absolute inset-0 flex flex-col items-center justify-center text-white p-3 text-center">
                         <span className="text-3xl mb-1">{mem.emoji}</span>
                         <div className="text-xs font-bold leading-tight">{mem.title}</div>
@@ -648,7 +658,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
               </div>
               <div className="mt-8 flex flex-col sm:flex-row gap-3">
                 <button
-                  onClick={() => onEnterApp('caregiver-auth', 'caregiver')}
+                  onClick={() => handleEnter('caregiver-auth', 'caregiver')}
                   type="button"
                   id="caregiver-section-login-btn"
                   className="px-6 py-3.5 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white font-extrabold text-sm shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2"
@@ -657,7 +667,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
                   <span>Caregiver Sign In</span>
                 </button>
                 <button
-                  onClick={() => onEnterApp('caregiver-auth', 'caregiver')}
+                  onClick={() => handleEnter('caregiver-auth', 'caregiver')}
                   type="button"
                   id="caregiver-section-register-btn"
                   className="px-6 py-3.5 rounded-2xl bg-white hover:bg-indigo-50 text-indigo-900 font-bold text-sm border-2 border-indigo-200 shadow-sm transition-all cursor-pointer flex items-center justify-center gap-2"
@@ -768,12 +778,12 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
               Join thousands of elderly users across India who are keeping their minds sharp, staying connected with their families, and living each day with joy.
             </p>
             <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
-              <button onClick={() => onEnterApp('login')} type="button" className="group inline-flex items-center justify-center gap-3 px-10 py-5 rounded-2xl text-lg font-extrabold text-sathi-800 bg-white hover:bg-amber-50 shadow-2xl hover:scale-105 transition-all cursor-pointer">
+              <button onClick={() => handleEnter('login')} type="button" className="group inline-flex items-center justify-center gap-3 px-10 py-5 rounded-2xl text-lg font-extrabold text-sathi-800 bg-white hover:bg-amber-50 shadow-2xl hover:scale-105 transition-all cursor-pointer">
                 <Brain className="w-6 h-6" />
                 <span>Sign In &amp; Open Dashboard</span>
                 <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
               </button>
-              <button onClick={() => onEnterApp('register')} type="button" className="group inline-flex items-center justify-center gap-2 px-8 py-5 rounded-2xl text-lg font-bold text-white border-2 border-white/60 hover:bg-white/10 transition-all cursor-pointer">
+              <button onClick={() => handleEnter('register')} type="button" className="group inline-flex items-center justify-center gap-2 px-8 py-5 rounded-2xl text-lg font-bold text-white border-2 border-white/60 hover:bg-white/10 transition-all cursor-pointer">
                 <span>Create New Account</span>
               </button>
             </div>
@@ -810,7 +820,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
             <div>
               <div className="text-white font-bold text-sm mb-4">Games</div>
               {GAMES.map(g => (
-                <button key={g.id} onClick={() => onEnterApp('login')} type="button" className="block text-xs text-gray-400 hover:text-white py-1.5 cursor-pointer transition-colors">{g.name}</button>
+                <button key={g.id} onClick={() => handleEnter('login')} type="button" className="block text-xs text-gray-400 hover:text-white py-1.5 cursor-pointer transition-colors">{g.name}</button>
               ))}
             </div>
             {/* Helplines */}

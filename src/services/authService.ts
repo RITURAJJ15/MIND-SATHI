@@ -236,15 +236,18 @@ class AuthService {
       if (intendedRole) {
         localStorage.setItem('ms_pending_oauth_role', intendedRole);
         sessionStorage.setItem('ms_pending_oauth_role', intendedRole);
+        sessionStorage.setItem('ms_intended_role', intendedRole);
       } else {
         localStorage.removeItem('ms_pending_oauth_role');
         sessionStorage.removeItem('ms_pending_oauth_role');
+        sessionStorage.removeItem('ms_intended_role');
       }
 
+      const redirectTarget = `${window.location.origin}/#/auth/callback`;
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
-          redirectTo: window.location.origin,
+          redirectTo: redirectTarget,
           queryParams: {
             access_type: 'offline',
             prompt: 'select_account',
@@ -267,6 +270,66 @@ class AuthService {
         msg = 'Google provider is not enabled in your Supabase project. Please enable Google under Authentication > Providers in your Supabase dashboard.';
       }
       return { success: false, error: msg };
+    }
+  }
+
+  /**
+   * Dedicated handler for processing the OAuth callback route.
+   * Extracts user, profile, verifies role, and returns the target route.
+   */
+  public async handleOAuthCallback(): Promise<string> {
+    try {
+      // 1. Wait for Supabase to resolve the session from URL
+      let authUser = (await supabase.auth.getUser()).data?.user;
+      if (!authUser) {
+        await new Promise((r) => setTimeout(r, 400));
+        authUser = (await supabase.auth.getUser()).data?.user;
+      }
+
+      if (!authUser || !authUser.id) {
+        console.warn('[AuthService] handleOAuthCallback: No authenticated Supabase user found.');
+        return '/patient/auth';
+      }
+
+      const userId = authUser.id;
+      const email = authUser.email || '';
+
+      // Development debug logging
+      if (import.meta.env.DEV) {
+        console.log('--- AUTH DEBUG LOG ---');
+        console.log('AUTH USER ID:', userId);
+        console.log('AUTH EMAIL:', email);
+        console.log('CURRENT PATH:', window.location.pathname);
+        console.log('CURRENT HASH:', window.location.hash);
+        console.log('OAUTH CALLBACK: /auth/callback');
+      }
+
+      const profile = await this.syncProfileFromSupabase(userId, email);
+      const role = profile?.role || this.currentProfile?.role;
+
+      if (import.meta.env.DEV) {
+        console.log('PROFILE ROLE:', role);
+      }
+
+      if (role === 'caregiver') {
+        if (import.meta.env.DEV) console.log('REDIRECT TARGET: /caregiver/dashboard');
+        return '/caregiver/dashboard';
+      } else if (role === 'elderly' || (role as string) === 'patient') {
+        if (import.meta.env.DEV) console.log('REDIRECT TARGET: /patient/dashboard');
+        return '/patient/dashboard';
+      } else if (role === 'clinician' || (role as string) === 'doctor') {
+        if (import.meta.env.DEV) console.log('REDIRECT TARGET: /doctor/dashboard');
+        return '/doctor/dashboard';
+      }
+
+      const pendingRole = sessionStorage.getItem('ms_intended_role') || localStorage.getItem('ms_pending_oauth_role');
+      if (pendingRole === 'caregiver') {
+        return '/caregiver/dashboard';
+      }
+      return '/patient/dashboard';
+    } catch (err) {
+      console.error('[AuthService] handleOAuthCallback exception:', err);
+      return '/';
     }
   }
 
@@ -398,7 +461,7 @@ class AuthService {
             localStorage.removeItem(SK_SESSION);
             this.notifyListeners();
             alert(`This Google account (${email}) is already registered as a Patient. Please use a different Google account for the Caregiver account.`);
-            window.location.href = window.location.origin;
+            window.location.hash = '#/caregiver/auth';
             return null;
           }
           if ((pendingOauthRole === 'elderly' || (pendingOauthRole as string) === 'patient') && mapped.role === 'caregiver') {
@@ -409,7 +472,7 @@ class AuthService {
             localStorage.removeItem(SK_SESSION);
             this.notifyListeners();
             alert(`This Google account (${email}) is registered as a Caregiver. Please use a different Google account or sign in through the Caregiver Portal.`);
-            window.location.href = window.location.origin;
+            window.location.hash = '#/patient/auth';
             return null;
           }
         }
@@ -454,7 +517,7 @@ class AuthService {
             localStorage.removeItem(SK_SESSION);
             this.notifyListeners();
             alert(`This Google account (${normalizedEmail}) is already registered as a Patient. A Caregiver must use a separate Google account with a different email address.`);
-            window.location.href = window.location.origin;
+            window.location.hash = '#/caregiver/auth';
             return null;
           }
           if ((pendingRole === 'elderly' || (pendingRole as string) === 'patient') && existingEmailProfile.role === 'caregiver') {
@@ -466,7 +529,7 @@ class AuthService {
             localStorage.removeItem(SK_SESSION);
             this.notifyListeners();
             alert(`This Google account (${normalizedEmail}) is registered as a Caregiver. Please use the Caregiver Portal to sign in.`);
-            window.location.href = window.location.origin;
+            window.location.hash = '#/patient/auth';
             return null;
           }
         }

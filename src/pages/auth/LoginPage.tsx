@@ -4,6 +4,7 @@ import { AshokaChakraIcon } from '../../components/layout/AshokaChakraIcon';
 import { GoogleSignInButton } from '../../components/common/GoogleSignInButton';
 import type { AuthScreen, AuthRole } from '../../types/auth';
 import { UserRole } from '../../types/user';
+import { navigate } from '../../router';
 
 interface LoginPageProps {
   onNavigateAuth: (screen: AuthScreen) => void;
@@ -60,27 +61,19 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onNavigateAuth }) => {
 
           <button
             type="button"
-            onClick={() => setSelectedRole('caregiver')}
-            className={`py-3 px-2 rounded-2xl border text-xs font-bold flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
-              selectedRole === 'caregiver'
-                ? 'bg-emerald-50 border-emerald-600 text-emerald-900 shadow-xs ring-2 ring-emerald-500/20'
-                : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
-            }`}
+            onClick={() => navigate('/caregiver/auth')}
+            className="py-3 px-2 rounded-2xl border text-xs font-bold flex flex-col items-center gap-1.5 transition-all cursor-pointer bg-gray-50 border-gray-200 text-gray-600 hover:bg-emerald-50 hover:border-emerald-300 hover:text-emerald-800"
           >
-            <User className={`w-4 h-4 ${selectedRole === 'caregiver' ? 'text-emerald-600' : 'text-gray-400'}`} />
+            <User className="w-4 h-4 text-gray-400 group-hover:text-emerald-600" />
             <span>Caregiver</span>
           </button>
 
           <button
             type="button"
-            onClick={() => setSelectedRole('clinician')}
-            className={`py-3 px-2 rounded-2xl border text-xs font-bold flex flex-col items-center gap-1.5 transition-all cursor-pointer ${
-              selectedRole === 'clinician'
-                ? 'bg-blue-50 border-blue-600 text-blue-900 shadow-xs ring-2 ring-blue-500/20'
-                : 'bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100'
-            }`}
+            onClick={() => navigate('/doctor/auth')}
+            className="py-3 px-2 rounded-2xl border text-xs font-bold flex flex-col items-center gap-1.5 transition-all cursor-pointer bg-gray-50 border-gray-200 text-gray-600 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-800"
           >
-            <Stethoscope className={`w-4 h-4 ${selectedRole === 'clinician' ? 'text-blue-600' : 'text-gray-400'}`} />
+            <Stethoscope className="w-4 h-4 text-gray-400 group-hover:text-blue-600" />
             <span>Clinician</span>
           </button>
         </div>

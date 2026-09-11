@@ -23,22 +23,17 @@ import { AIAssistantPage } from './pages/AIAssistantPage';
 import { AdminPortalPage } from './pages/AdminPortalPage';
 import { PatientOnboardingPage } from './pages/auth/PatientOnboardingPage';
 import { CaregiverAuthPage } from './pages/auth/CaregiverAuthPage';
+import { OAuthCallbackPage } from './pages/auth/OAuthCallbackPage';
 import { authService } from './services/authService';
 import { useCurrentUser } from './hooks/useCurrentUser';
+import { useRouter } from './router';
 import type { AuthScreen, AuthRole } from './types/auth';
 import type { GameId, DifficultyTier } from './types/game';
 import { Brain, LogOut } from 'lucide-react';
 
-// Role → default tab after login/register
-const roleToTab: Record<AuthRole, string> = {
-  elderly:   'home',
-  caregiver: 'caregiver',
-  clinician: 'clinician',
-  admin:     'home',
-};
-
 export const App: React.FC = () => {
-  const [activeTab, setActiveTab]     = useState<string>('home');
+  const { currentPath, navigate } = useRouter();
+  const [activeTab, setActiveTab] = useState<string>('home');
   const {
     isAuthenticated,
     isLoading,
@@ -49,21 +44,55 @@ export const App: React.FC = () => {
     needsRoleSelection,
     completeGoogleProfile,
   } = useCurrentUser(activeTab);
-  const [showLanding, setShowLanding] = useState<boolean>(true);
-  const [authScreen, setAuthScreen]   = useState<AuthScreen>('login');
+
+  const [authScreen, setAuthScreen] = useState<AuthScreen>('login');
   const [pendingRole, setPendingRole] = useState<AuthRole | null>(null);
-  const [activeGameId, setActiveGameId]       = useState<GameId>('smriti_sangam');
+  const [activeGameId, setActiveGameId] = useState<GameId>('smriti_sangam');
   const [activeDifficulty, setActiveDifficulty] = useState<DifficultyTier>('saral');
 
+  // ── Automatic route guard and role protection ──────────────────────────────
   useEffect(() => {
-    if ((currentUser?.role === 'caregiver' || session?.user?.role === 'caregiver' || isCaregiver) && activeTab !== 'caregiver') {
-      setActiveTab('caregiver');
+    if (isLoading) return;
+
+    // Do not redirect while processing OAuth callback
+    if (currentPath === '/auth/callback') return;
+
+    if (isAuthenticated) {
+      const userRole = currentUser?.role || session?.user?.role;
+
+      if (userRole === 'caregiver' || isCaregiver) {
+        // Caregiver must stay in caregiver area
+        if (currentPath === '/patient/dashboard' || currentPath === '/patient/auth' || currentPath === '/') {
+          navigate('/caregiver/dashboard', true);
+        }
+      } else if (userRole === 'elderly' || (userRole as string) === 'patient' || isElderly) {
+        // Patient must stay in patient area
+        if (currentPath === '/caregiver/dashboard' || currentPath === '/caregiver/auth' || currentPath === '/') {
+          navigate('/patient/dashboard', true);
+        }
+      } else if (userRole === 'clinician') {
+        if (currentPath === '/patient/dashboard' || currentPath === '/caregiver/dashboard' || currentPath === '/') {
+          navigate('/doctor/dashboard', true);
+        }
+      }
+    } else {
+      // Unauthenticated users cannot access dashboard routes
+      if (currentPath === '/patient/dashboard') {
+        navigate('/patient/auth', true);
+      } else if (currentPath === '/caregiver/dashboard') {
+        navigate('/caregiver/auth', true);
+      } else if (currentPath === '/doctor/dashboard') {
+        navigate('/doctor/auth', true);
+      }
     }
-  }, [currentUser?.role, session?.user?.role, isCaregiver, activeTab]);
+  }, [isAuthenticated, isLoading, currentUser?.role, session?.user?.role, isCaregiver, isElderly, currentPath]);
 
   const handleNavigate = (tab: string, extraId?: string) => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    if (tab === 'logout') { handleLogout(); return; }
+    if (tab === 'logout') {
+      handleLogout();
+      return;
+    }
     if (tab === 'play' && extraId) {
       setActiveGameId(extraId as GameId);
       setActiveTab('play');
@@ -79,24 +108,24 @@ export const App: React.FC = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleEnterApp = (screen: 'login' | 'register' | 'caregiver-auth' = 'login') => {
-    setAuthScreen(screen);
-    setShowLanding(false);
-    window.scrollTo({ top: 0, behavior: 'instant' });
-  };
-
   const handleLogout = async () => {
+    const wasCaregiver = currentUser?.role === 'caregiver' || isCaregiver;
     await authService.logout();
-    setAuthScreen('login');
-    setShowLanding(false);
-    setActiveTab('home');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (wasCaregiver) {
+      navigate('/caregiver/auth', true);
+    } else {
+      navigate('/', true);
+    }
   };
 
   const handleAuthSuccess = (role: AuthRole) => {
-    const tab = roleToTab[role] ?? 'home';
-    setActiveTab(tab);
-    window.scrollTo({ top: 0, behavior: 'instant' });
+    if (role === 'caregiver') {
+      navigate('/caregiver/dashboard', true);
+    } else if (role === 'clinician') {
+      navigate('/doctor/dashboard', true);
+    } else {
+      navigate('/patient/dashboard', true);
+    }
   };
 
   const handleNavigateAuth = (screen: AuthScreen) => setAuthScreen(screen);
@@ -126,32 +155,34 @@ export const App: React.FC = () => {
     );
   }
 
-  // ── Landing page ───────────────────────────────────────────────────────────
-  if (showLanding && !isAuthenticated) {
+  // ── Route 1: OAuth Callback ────────────────────────────────────────────────
+  if (currentPath === '/auth/callback') {
+    return <OAuthCallbackPage />;
+  }
+
+  // ── Route 2: Caregiver Authentication ──────────────────────────────────────
+  if (currentPath === '/caregiver/auth') {
     return (
-      <LandingPage
-        onEnterApp={handleEnterApp}
-        onCaregiverSuccess={() => {
-          setActiveTab('caregiver');
-          setShowLanding(false);
-        }}
+      <CaregiverAuthPage
+        onBackToLanding={() => navigate('/')}
+        onSuccess={handleAuthSuccess}
       />
     );
   }
 
-  // ── Auth screens (not yet authenticated) ──────────────────────────────────
-  if (!isAuthenticated) {
-    if (authScreen === 'caregiver-auth') {
-      return (
-        <CaregiverAuthPage
-          onBackToLanding={() => setShowLanding(true)}
-          onSuccess={handleAuthSuccess}
-        />
-      );
-    }
-
+  // ── Route 3: Doctor Authentication ─────────────────────────────────────────
+  if (currentPath === '/doctor/auth') {
     return (
-      <AuthLayout onBackToLanding={() => setShowLanding(true)}>
+      <AuthLayout onBackToLanding={() => navigate('/')}>
+        <ClinicianPortalPage />
+      </AuthLayout>
+    );
+  }
+
+  // ── Route 4: Patient Authentication ────────────────────────────────────────
+  if (currentPath === '/patient/auth' && !isAuthenticated) {
+    return (
+      <AuthLayout onBackToLanding={() => navigate('/')}>
         {authScreen === 'login' && (
           <LoginPage
             onNavigateAuth={handleNavigateAuth}
@@ -178,6 +209,21 @@ export const App: React.FC = () => {
     );
   }
 
+  // ── Route 5: Root Landing Page ─────────────────────────────────────────────
+  if (currentPath === '/' && !isAuthenticated) {
+    return (
+      <LandingPage
+        onEnterApp={(screen, role) => {
+          if (role === 'caregiver' || screen === 'caregiver-auth') {
+            navigate('/caregiver/auth');
+          } else {
+            navigate('/patient/auth');
+          }
+        }}
+      />
+    );
+  }
+
   // ── First-time Google Auth: Role Selection required ───────────────────────
   if (isAuthenticated && needsRoleSelection) {
     return (
@@ -187,9 +233,13 @@ export const App: React.FC = () => {
           onSelectRole={async (role) => {
             const profile = await completeGoogleProfile(role);
             if (profile) {
-              const tab = roleToTab[profile.role] ?? 'home';
-              setActiveTab(tab);
-              window.scrollTo({ top: 0, behavior: 'instant' });
+              if (profile.role === 'caregiver') {
+                navigate('/caregiver/dashboard', true);
+              } else if (profile.role === 'clinician') {
+                navigate('/doctor/dashboard', true);
+              } else {
+                navigate('/patient/dashboard', true);
+              }
             }
           }}
         />
@@ -197,32 +247,19 @@ export const App: React.FC = () => {
     );
   }
 
-  // ── Patient Onboarding (authenticated elderly, no onboarding yet) ──────────
-  // STRICT: Patient Onboarding is strictly for elderly seniors. Caregivers must NEVER be routed here!
-  if (
-    !isCaregiver &&
-    session?.user?.role !== 'caregiver' &&
-    currentUser?.role !== 'caregiver' &&
-    isElderly &&
-    currentUser &&
-    !currentUser.hasCompletedOnboarding
-  ) {
-    return (
-      <AuthLayout>
-        <PatientOnboardingPage
-          onComplete={() => {
-            // Mark locally first so the UI transitions immediately
-            authService.updateCurrentUserProfile({ hasCompletedOnboarding: true });
-            setActiveTab('home');
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          }}
-        />
-      </AuthLayout>
-    );
-  }
+  // ── Route 6: Caregiver Dashboard (Strictly patient oversight & records) ────
+  if (currentPath === '/caregiver/dashboard') {
+    if (!isAuthenticated) {
+      navigate('/caregiver/auth', true);
+      return null;
+    }
 
-  // ── Dedicated Caregiver Portal View (Strictly patient oversight & records) ──
-  if (currentUser?.role === 'caregiver' || session?.user?.role === 'caregiver' || isCaregiver) {
+    if (currentUser?.role !== 'caregiver' && !isCaregiver && session?.user?.role !== 'caregiver') {
+      // Access denied to non-caregivers
+      navigate('/patient/dashboard', true);
+      return null;
+    }
+
     return (
       <div className="min-h-screen flex flex-col bg-[#F8FAFC]">
         {/* Caregiver Dedicated Header */}
@@ -253,15 +290,15 @@ export const App: React.FC = () => {
               <div className="flex items-center gap-2.5 bg-emerald-50/80 border border-emerald-200 px-3 py-1.5 rounded-2xl">
                 <img
                   src={
-                    currentUser.avatarUrl ||
-                    `https://api.dicebear.com/9.x/avataaars/svg?seed=${currentUser.id}&backgroundColor=b6e3f4`
+                    currentUser?.avatarUrl ||
+                    `https://api.dicebear.com/9.x/avataaars/svg?seed=${currentUser?.id}&backgroundColor=b6e3f4`
                   }
-                  alt={currentUser.name || 'Caregiver'}
+                  alt={currentUser?.name || 'Caregiver'}
                   className="w-8 h-8 rounded-full object-cover border-2 border-emerald-500 shadow-xs"
                 />
                 <div className="text-left hidden sm:block">
                   <div className="text-xs font-black text-emerald-950 truncate max-w-[150px]">
-                    {currentUser.name || currentUser.preferredName || 'Caregiver'}
+                    {currentUser?.name || currentUser?.preferredName || 'Caregiver'}
                   </div>
                   <div className="text-[10px] font-semibold text-emerald-700">Verified Caregiver</div>
                 </div>
@@ -288,35 +325,66 @@ export const App: React.FC = () => {
     );
   }
 
-  // ── Main app (authenticated elderly / clinician / admin) ──────────────────
+  // ── Route 7: Doctor Dashboard ──────────────────────────────────────────────
+  if (currentPath === '/doctor/dashboard') {
+    if (!isAuthenticated) {
+      navigate('/doctor/auth', true);
+      return null;
+    }
+    return <ClinicianPortalPage />;
+  }
+
+  // ── Route 8: Patient Dashboard ─────────────────────────────────────────────
+  // Patient Onboarding (authenticated elderly, no onboarding yet)
+  if (
+    isElderly &&
+    currentUser &&
+    !currentUser.hasCompletedOnboarding &&
+    currentUser.role !== 'caregiver' &&
+    !isCaregiver
+  ) {
+    return (
+      <AuthLayout>
+        <PatientOnboardingPage
+          onComplete={() => {
+            authService.updateCurrentUserProfile({ hasCompletedOnboarding: true });
+            navigate('/patient/dashboard', true);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+        />
+      </AuthLayout>
+    );
+  }
+
+  // Patient Dashboard Main Layout
   return (
     <MainLayout activeTab={activeTab} onNavigate={handleNavigate} onLogout={handleLogout}>
-      {activeTab === 'home'        && <HomePage onNavigate={handleNavigate} />}
-      {activeTab === 'games'       && <GamesHubPage onPlayGame={handleLaunchGame} />}
-      {activeTab === 'play'        && (
+      {activeTab === 'home' && <HomePage onNavigate={handleNavigate} />}
+      {activeTab === 'games' && <GamesHubPage onPlayGame={handleLaunchGame} />}
+      {activeTab === 'play' && (
         <GamePlayPage
           gameId={activeGameId}
           difficulty={activeDifficulty}
           onBack={() => setActiveTab('games')}
         />
       )}
-      {activeTab === 'daily-plan'  && (
+      {activeTab === 'daily-plan' && (
         <DailyPlanPage
           onPlayGame={handleLaunchGame}
           onOpenMemories={() => setActiveTab('memories')}
         />
       )}
-      {activeTab === 'memories'    && <MemoryVaultPage />}
-      {activeTab === 'progress'    && <ProgressPage />}
+      {activeTab === 'memories' && <MemoryVaultPage />}
+      {activeTab === 'progress' && <ProgressPage />}
       {activeTab === 'leaderboard' && <LeaderboardPage />}
-      {activeTab === 'reminders'   && <RemindersPage />}
-      {activeTab === 'family'      && <FamilyCallingPage />}
-      {activeTab === 'assistant'   && <AIAssistantPage />}
-      {activeTab === 'ayushman'    && <AyushmanHubPage />}
-      {activeTab === 'caregiver'   && <CaregiverPortalPage />}
-      {activeTab === 'clinician'   && <ClinicianPortalPage />}
-      {activeTab === 'admin'       && <AdminPortalPage />}
-      {activeTab === 'settings'    && <ProfileSettingsPage />}
+      {activeTab === 'reminders' && <RemindersPage />}
+      {activeTab === 'family' && <FamilyCallingPage />}
+      {activeTab === 'assistant' && <AIAssistantPage />}
+      {activeTab === 'ayushman' && <AyushmanHubPage />}
+      {activeTab === 'caregiver' && <CaregiverPortalPage />}
+      {activeTab === 'clinician' && <ClinicianPortalPage />}
+      {activeTab === 'admin' && <AdminPortalPage />}
+      {activeTab === 'settings' && <ProfileSettingsPage />}
     </MainLayout>
   );
 };
