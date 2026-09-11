@@ -1,41 +1,37 @@
 /**
  * authService.ts
  * ─────────────────────────────────────────────────────────────────────────────
- * Real Supabase Authentication — signUp / signInWithPassword / signOut.
- * localStorage is used only as a read-through cache for instant first paint;
- * Supabase Auth is the single source of truth.
+ * Real Supabase Authentication via Google OAuth exclusively.
+ * - Single source of truth is Supabase Auth & public.profiles table.
+ * - No fake accounts, mock credentials, or format-based email validation.
+ * - One Google Account = One Supabase Auth Identity = Exactly One Role in DB.
+ * - Multi-tab safe: each tab determines its own active user from auth.uid().
+ * - Connecting a patient NEVER mutates the caregiver's profile or active role.
  */
 
 import { supabase } from '../lib/supabase';
 import { UserProfile, UserRole } from '../types/user';
 import {
-  AuthCredentials,
   AuthResult,
   AuthSession,
   AuthUser,
-  RegisterPayload,
-  isGoogleEmail,
 } from '../types/auth';
 import { offlineDb } from '../lib/offlineDb';
 import { familyService } from './familyService';
-import { reminderService } from './reminderService';
-import { gameService } from './gameService';
 
 const SK_SESSION = 'ms_auth_session';
-const SK_PROFILES = 'ms_all_profiles';
-const SK_CREDENTIALS = 'ms_local_credentials';
 const SK_PATIENT_PROFILE = 'ms_active_patient_profile';
 const SK_CAREGIVER_PROFILE = 'ms_active_caregiver_profile';
 const SK_AVATAR_PREFIX = 'mind_sathi_avatar_';
 
-/** Helper to cache genuine patient avatars so they are never lost on login or session resets */
+/** Helper to cache genuine avatars so they are preserved across sessions */
 export function saveAvatarToCache(userId: string, email?: string, avatarUrl?: string): void {
   if (!avatarUrl || avatarUrl.includes('dicebear.com')) return;
   if (userId) localStorage.setItem(`${SK_AVATAR_PREFIX}${userId}`, avatarUrl);
   if (email) localStorage.setItem(`${SK_AVATAR_PREFIX}${email.toLowerCase()}`, avatarUrl);
 }
 
-/** Helper to retrieve genuine cached patient avatars */
+/** Helper to retrieve genuine cached avatars */
 export function getAvatarFromCache(userId: string, email?: string): string | null {
   if (userId) {
     const byId = localStorage.getItem(`${SK_AVATAR_PREFIX}${userId}`);
@@ -47,59 +43,6 @@ export function getAvatarFromCache(userId: string, email?: string): string | nul
   }
   return null;
 }
-
-/**
- * Generates a stable, deterministic UUID for a given email address.
- * Ensures the exact same user ID is produced across different browsers, devices,
- * and sessions without relying on volatile random UUID generation.
- */
-export function getDeterministicUserId(email: string): string {
-  const clean = (email || '').trim().toLowerCase();
-  if (!clean) return 'e1000000-0000-4000-a000-000000000001';
-  if (clean === 'dadi@mindsathi.in') return 'e1000000-0000-4000-a000-000000000001';
-  if (clean === 'admin@mindsathi.in') return 'c1000000-0000-4000-a000-000000000002';
-  if (clean === 'rituraj11@mindsathi.in') return 'a1000000-0000-4000-a000-000000000003';
-
-  let h1 = 0x811c9dc5;
-  let h2 = 0x55555555;
-  let h3 = 0x33333333;
-  let h4 = 0x0f0f0f0f;
-
-  for (let i = 0; i < clean.length; i++) {
-    const code = clean.charCodeAt(i);
-    h1 = Math.imul(h1 ^ code, 0x01000193);
-    h2 = Math.imul(h2 ^ (code << 1), 0x01000193);
-    h3 = Math.imul(h3 ^ (code << 2), 0x01000193);
-    h4 = Math.imul(h4 ^ (code << 3), 0x01000193);
-  }
-
-  const toHex = (n: number) => (n >>> 0).toString(16).padStart(8, '0');
-  const part1 = toHex(h1);
-  const part2 = toHex(h2);
-  const part3 = toHex(h3);
-  const part4 = toHex(h4);
-
-  const timeLow = part1;
-  const timeMid = part2.substring(0, 4);
-  const timeHi = '4' + part2.substring(5, 8);
-  const clockSeq = 'a' + part3.substring(1, 4);
-  const node = part3.substring(4, 8) + part4.substring(0, 8);
-
-  return `${timeLow}-${timeMid}-${timeHi}-${clockSeq}-${node}`;
-}
-
-export interface StoredCredential {
-  email: string;
-  username?: string;
-  password: string;
-  userId: string;
-  role: UserRole;
-  mobile?: string;
-  createdAt: string;
-}
-
-export const DEFAULT_CREDENTIALS: StoredCredential[] = [];
-export const DEFAULT_PROFILES: UserProfile[] = [];
 
 export function isRealProfile(p: UserProfile): boolean {
   if (!p || !p.id) return false;
@@ -113,58 +56,16 @@ export function isRealProfile(p: UserProfile): boolean {
   ) {
     return false;
   }
-  // Hardcoded legacy demo user IDs
-  if (
-    id === 'e1000000-0000-4000-a000-000000000001' ||
-    id === 'c1000000-0000-4000-a000-000000000002' ||
-    id === 'a1000000-0000-4000-a000-000000000003'
-  ) {
-    return false;
-  }
-  const name = (p.name || '').trim().toLowerCase();
-  if (
-    name.includes('shanti devi') ||
-    name.includes('bhupen bora') ||
-    name.includes('dr. arvind mukherjee') ||
-    name.includes('dadi sathi') ||
-    name.includes('dr. admin caregiver')
-  ) {
-    return false;
-  }
   return true;
-}
-
-function getStoredCredentials(): StoredCredential[] {
-  try {
-    const raw = localStorage.getItem(SK_CREDENTIALS);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveStoredCredential(cred: StoredCredential) {
-  try {
-    const list = getStoredCredentials().filter(
-      (c) => c.email.toLowerCase() !== cred.email.toLowerCase()
-    );
-    list.push(cred);
-    localStorage.setItem(SK_CREDENTIALS, JSON.stringify(list));
-  } catch {}
-}
-
-function findStoredCredential(emailOrPhone: string): StoredCredential | undefined {
-  if (!emailOrPhone) return undefined;
-  const clean = emailOrPhone.trim().toLowerCase();
-  return getStoredCredentials().find(
-    (c) => c.email.toLowerCase() === clean || (c.mobile && c.mobile.replace(/\s/g, '') === clean)
-  );
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 function mapDbProfileToUser(dbRow: Record<string, unknown>, email = ''): UserProfile {
   const id = dbRow.id as string;
+  const rawRole = (dbRow.role as string) || 'elderly';
+  const role: UserRole = (rawRole === 'patient' ? 'elderly' : rawRole) as UserRole;
+
   return {
     id,
     name: (dbRow.full_name as string) || 'MIND SATHI User',
@@ -172,12 +73,12 @@ function mapDbProfileToUser(dbRow: Record<string, unknown>, email = ''): UserPro
       (dbRow.preferred_name as string) ||
       ((dbRow.full_name as string)?.split(' ')[0]) ||
       'Sathi',
-    role: ((dbRow.role === 'patient' ? 'elderly' : dbRow.role) as UserRole),
+    role,
     age: (dbRow.age as number) ?? 65,
     gender: (dbRow.gender as string) ?? 'other',
     avatarUrl: (() => {
       const profileEmail = email || (dbRow.email as string) || '';
-      const rawPhoto = (dbRow.profile_photo_url as string) || '';
+      const rawPhoto = (dbRow.profile_photo_url as string) || (dbRow.avatar_url as string) || '';
       const isRealDbPhoto = rawPhoto && !rawPhoto.includes('dicebear.com');
       const cachedPhoto = !isRealDbPhoto ? getAvatarFromCache(id, profileEmail) : null;
       if (isRealDbPhoto) {
@@ -199,7 +100,7 @@ function mapDbProfileToUser(dbRow: Record<string, unknown>, email = ''): UserPro
     pmjayStatus: (dbRow.ayushman_status as string) || 'none',
     abhaId: dbRow.abha_id as string | undefined,
     abhaStatus: (dbRow.abha_status as string) || 'none',
-    hasCompletedOnboarding: (dbRow.has_completed_onboarding as boolean) ?? true,
+    hasCompletedOnboarding: (dbRow.has_completed_onboarding as boolean) ?? (role === 'caregiver'),
     familyMemberCount: (dbRow.family_member_count as number) ?? 0,
     caregiverIds: (dbRow.caregiver_ids as string[]) || [],
     clinicianIds: (dbRow.clinician_ids as string[]) || [],
@@ -213,7 +114,7 @@ function mapDbProfileToUser(dbRow: Record<string, unknown>, email = ''): UserPro
     streakDays: (dbRow.streak_days as number) ?? 1,
     totalXp: (dbRow.total_xp as number) ?? 50,
     level: (dbRow.level as number) ?? 1,
-    levelTitle: (dbRow.level_title as string) || 'Naya Sathi',
+    levelTitle: (dbRow.level_title as string) || (role === 'caregiver' ? 'Active Caregiver' : 'Naya Sathi'),
     createdAt: (dbRow.created_at as string) || new Date().toISOString(),
     email: email || (dbRow.email as string) || '',
     phone: (dbRow.phone as string) || '',
@@ -255,12 +156,11 @@ function makeSession(profile: UserProfile, email: string, mobile = ''): AuthSess
 class AuthService {
   private session: AuthSession | null = null;
   private currentProfile: UserProfile | null = null;
-  private patientProfile: UserProfile | null = null;
-  private caregiverProfile: UserProfile | null = null;
-  private allProfiles: UserProfile[] = [];
+  private connectedPatient: UserProfile | null = null;
   private listeners: Set<(session: AuthSession | null) => void> = new Set();
   private needsRoleSelection: boolean = false;
   private pendingGoogleUser: any = null;
+
   /** Resolves once the Supabase session check on startup is complete. */
   public readonly ready: Promise<void>;
   private _resolveReady!: () => void;
@@ -268,101 +168,45 @@ class AuthService {
   constructor() {
     this.ready = new Promise((res) => { this._resolveReady = res; });
 
-    // Restore cached profiles for instant first paint, purging any legacy mock profiles
-    const storedProfiles = localStorage.getItem(SK_PROFILES);
-    if (storedProfiles) {
-      try {
-        const parsed = JSON.parse(storedProfiles) as UserProfile[];
-        this.allProfiles = parsed.filter(isRealProfile);
-      } catch {
-        this.allProfiles = [];
-      }
-    } else {
-      this.allProfiles = [];
-    }
-
-    // Sanitize cached profiles
-    this.allProfiles = this.allProfiles.filter(isRealProfile);
-    localStorage.setItem(SK_PROFILES, JSON.stringify(this.allProfiles));
-
-    // Restore cached patient profile
-    const storedPatient = localStorage.getItem(SK_PATIENT_PROFILE);
-    if (storedPatient) {
-      try {
-        const p = JSON.parse(storedPatient) as UserProfile;
-        if (isRealProfile(p)) this.patientProfile = p;
-      } catch {}
-    }
-
-    // Restore cached caregiver profile
-    const storedCaregiver = localStorage.getItem(SK_CAREGIVER_PROFILE);
-    if (storedCaregiver) {
-      try {
-        const c = JSON.parse(storedCaregiver) as UserProfile;
-        if (isRealProfile(c)) this.caregiverProfile = c;
-      } catch {}
-    }
-
-    // Restore cached session (for instant UI paint only — will be validated below)
-    const storedSession = localStorage.getItem(SK_SESSION);
-    if (storedSession) {
-      try {
-        const parsed = JSON.parse(storedSession) as AuthSession;
-        if (new Date(parsed.expiresAt) > new Date()) {
-          this.session = parsed;
-          const found = this.allProfiles.find((p) => p.id === parsed.user.id) ?? null;
-          if (parsed.user.role === 'caregiver') {
-            this.currentProfile = this.caregiverProfile ?? found;
-          } else {
-            this.currentProfile = this.patientProfile ?? found;
-          }
-        } else {
-          localStorage.removeItem(SK_SESSION);
-        }
-      } catch {
-        localStorage.removeItem(SK_SESSION);
-      }
-    }
-
-    // Validate with Supabase asynchronously
+    // Validate with Supabase asynchronously on initialization
     this.initSupabaseAuth();
   }
 
   private async initSupabaseAuth() {
     try {
-      // Get the current real Supabase session (works after page refresh)
-      const { data: { session: sbSession } } = await supabase.auth.getSession();
+      // Get the current real Supabase session
+      const { data: { session: sbSession }, error } = await supabase.auth.getSession();
+
+      if (error) {
+        console.warn('[AuthService] getSession notice:', error.message);
+      }
 
       if (sbSession?.user) {
         await this.syncProfileFromSupabase(sbSession.user.id, sbSession.user.email || '');
-      } else if (this.session?.user) {
-        // Maintain active user session across refreshes (rate-limit resilient or unconfirmed email)
-        console.log('[AuthService] Preserving active user session for:', this.session.user.email);
-        const found = this.allProfiles.find((p) => p.id === this.session!.user.id) ?? null;
-        if (!this.currentProfile) {
-          if (this.session.user.role === 'caregiver') {
-            this.currentProfile = this.caregiverProfile ?? found;
-          } else {
-            this.currentProfile = this.patientProfile ?? found;
-          }
-        }
-        this.notifyListeners();
       } else {
-        // No session exists
         this.session = null;
         this.currentProfile = null;
+        this.connectedPatient = null;
         localStorage.removeItem(SK_SESSION);
         this.notifyListeners();
       }
 
-      // Listen for future auth changes (token refresh, sign-out from another tab, etc.)
+      // Listen for auth changes
       supabase.auth.onAuthStateChange(async (event, newSession) => {
-        if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && newSession?.user) {
-          await this.syncProfileFromSupabase(newSession.user.id, newSession.user.email || '');
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+          if (newSession?.user) {
+            // Only update in this tab if session belongs to this user or if tab had no active user
+            if (!this.session || this.session.user.id === newSession.user.id) {
+              await this.syncProfileFromSupabase(newSession.user.id, newSession.user.email || '');
+            } else {
+              console.log('[AuthService] Retaining tab session for user:', this.session.user.id);
+            }
+          }
         } else if (event === 'SIGNED_OUT') {
-          // If explicitly signed out without local session
-          if (!this.session) {
+          if (!newSession || (this.session && newSession.user?.id === this.session.user.id)) {
+            this.session = null;
             this.currentProfile = null;
+            this.connectedPatient = null;
             localStorage.removeItem(SK_SESSION);
             this.notifyListeners();
           }
@@ -397,7 +241,7 @@ class AuthService {
         sessionStorage.removeItem('ms_pending_oauth_role');
       }
 
-      const { data, error } = await supabase.auth.signInWithOAuth({
+      const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
           redirectTo: window.location.origin,
@@ -427,7 +271,7 @@ class AuthService {
   }
 
   /**
-   * Completes Google onboarding by creating the permanent profile with the selected role.
+   * Completes Google onboarding by creating the permanent profile with the selected role in Supabase.
    */
   public async completeGoogleProfile(role: UserRole, details?: Partial<UserProfile>): Promise<UserProfile | null> {
     try {
@@ -449,23 +293,21 @@ class AuthService {
       const newProfile: UserProfile = {
         id: userId,
         name: fullName,
-        preferredName: preferredName,
+        preferredName,
         role,
-        age: details?.age ?? (role === 'elderly' ? 70 : 35),
-        gender: details?.gender ?? 'other',
+        age: details?.age || 65,
+        gender: details?.gender || 'other',
         avatarUrl: photoUrl,
-        primaryLanguage: details?.primaryLanguage ?? 'en',
-        city: details?.city ?? 'Guwahati',
-        state: details?.state ?? 'Assam',
-        northeastRegion: details?.northeastRegion ?? 'Assam',
-        isAyushmanMember: details?.isAyushmanMember ?? false,
-        ayushmanMemberId: details?.ayushmanMemberId,
-        ayushmanStatus: details?.ayushmanStatus ?? 'none',
+        primaryLanguage: details?.primaryLanguage || 'en',
+        city: details?.city || 'Guwahati',
+        state: details?.state || 'Assam',
+        northeastRegion: details?.northeastRegion || 'Assam',
+        isAyushmanMember: false,
+        ayushmanStatus: 'none',
         pmjayStatus: 'none',
-        abhaId: details?.abhaId,
-        abhaStatus: details?.abhaStatus ?? 'none',
-        hasCompletedOnboarding: role !== 'elderly',
-        familyMemberCount: 0,
+        abhaStatus: 'none',
+        connectionCode,
+        hasCompletedOnboarding: role === 'caregiver' ? true : false,
         caregiverIds: [],
         clinicianIds: [],
         accessibility: {
@@ -478,78 +320,36 @@ class AuthService {
         streakDays: 1,
         totalXp: 50,
         level: 1,
-        levelTitle: 'Naya Sathi',
+        levelTitle: role === 'caregiver' ? 'Active Caregiver' : 'Naya Sathi',
         createdAt: new Date().toISOString(),
         email,
-        phone: details?.phone || meta.phone || (meta.mobile as string) || '',
-        connectionCode,
       };
 
-      if (photoUrl && !photoUrl.includes('dicebear.com')) {
-        saveAvatarToCache(userId, email, photoUrl);
-      }
-
-      // Upsert into Supabase profiles table
+      // Direct UPSERT into Supabase profiles table
       try {
-        await supabase.from('profiles').upsert({
+        const { error: upsertErr } = await supabase.from('profiles').upsert({
           id: userId,
           email,
           full_name: fullName,
           preferred_name: preferredName,
-          role: role === 'elderly' ? 'patient' : role,
+          role,
           profile_photo_url: photoUrl,
           connection_code: connectionCode,
-          age: newProfile.age,
-          gender: newProfile.gender,
-          preferred_language: newProfile.primaryLanguage,
-          city: newProfile.city,
-          state: newProfile.state,
-          northeast_region: newProfile.northeastRegion,
-          is_ayushman_member: newProfile.isAyushmanMember,
-          ayushman_member_id: newProfile.ayushmanMemberId,
-          ayushman_status: newProfile.ayushmanStatus,
-          abha_id: newProfile.abhaId,
-          abha_status: newProfile.abhaStatus,
           has_completed_onboarding: newProfile.hasCompletedOnboarding,
-          accessibility: newProfile.accessibility,
-          created_at: newProfile.createdAt,
           updated_at: new Date().toISOString(),
-        });
+        }, { onConflict: 'id' });
+
+        if (upsertErr) {
+          console.warn('[AuthService] Supabase profile upsert warning:', upsertErr.message);
+        }
       } catch (upsertErr) {
-        console.warn('[AuthService] completeGoogleProfile Supabase upsert note:', upsertErr);
+        console.warn('[AuthService] Supabase profiles upsert exception:', upsertErr);
       }
 
+      this.currentProfile = newProfile;
+      this.session = makeSession(newProfile, email);
       this.needsRoleSelection = false;
       this.pendingGoogleUser = null;
-      sessionStorage.removeItem('ms_pending_oauth_role');
-      localStorage.removeItem('ms_pending_oauth_role');
-
-      if (role === 'elderly' || (role as string) === 'patient') {
-        this.patientProfile = newProfile;
-        this.caregiverProfile = null;
-        localStorage.removeItem(SK_CAREGIVER_PROFILE);
-        localStorage.setItem(SK_PATIENT_PROFILE, JSON.stringify(newProfile));
-        this.currentProfile = newProfile;
-      } else if (role === 'caregiver') {
-        this.caregiverProfile = newProfile;
-        this.patientProfile = null;
-        localStorage.removeItem(SK_PATIENT_PROFILE);
-        localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(newProfile));
-        this.currentProfile = newProfile;
-      } else {
-        this.currentProfile = newProfile;
-      }
-
-      const idx = this.allProfiles.findIndex((p) => p.id === userId);
-      if (idx >= 0) {
-        this.allProfiles[idx] = newProfile;
-      } else {
-        this.allProfiles.unshift(newProfile);
-      }
-      localStorage.setItem(SK_PROFILES, JSON.stringify(this.allProfiles));
-      offlineDb.profiles.put(newProfile).catch(() => {});
-
-      this.session = makeSession(newProfile, email);
       localStorage.setItem(SK_SESSION, JSON.stringify(this.session));
       this.notifyListeners();
       return newProfile;
@@ -559,7 +359,11 @@ class AuthService {
     }
   }
 
-  private async syncProfileFromSupabase(userId: string, email: string): Promise<UserProfile | null> {
+  /**
+   * Synchronizes user profile directly from Supabase profiles table using auth.uid().
+   * Enforces strict role collision prevention and role permanence.
+   */
+  public async syncProfileFromSupabase(userId: string, email: string): Promise<UserProfile | null> {
     try {
       const { data: dbProfile, error } = await supabase
         .from('profiles')
@@ -568,36 +372,13 @@ class AuthService {
         .maybeSingle();
 
       if (dbProfile && !error) {
-        let mapped = mapDbProfileToUser(dbProfile as Record<string, unknown>, email);
+        const mapped = mapDbProfileToUser(dbProfile as Record<string, unknown>, email);
 
-        // Ensure connectionCode is populated
-        if (!mapped.connectionCode) {
+        // Ensure connectionCode is populated for patients
+        if (!mapped.connectionCode && (mapped.role === 'elderly' || (mapped.role as string) === 'patient')) {
           const generatedCode = generateConnectionCode();
           mapped.connectionCode = generatedCode;
           supabase.from('profiles').update({ connection_code: generatedCode }).eq('id', userId).then(() => {});
-        }
-
-        // Preserve hasCompletedOnboarding=true if the user just completed onboarding
-        const existingLocal = this.allProfiles.find((p) => p.id === userId || (p.email && p.email.toLowerCase() === email.toLowerCase()));
-        if (existingLocal?.hasCompletedOnboarding && !mapped.hasCompletedOnboarding) {
-          mapped.hasCompletedOnboarding = true;
-        }
-
-        // Preserve real photo if DB returned a DiceBear placeholder
-        const cachedPhoto = getAvatarFromCache(userId, email);
-        if (mapped.avatarUrl.includes('dicebear.com')) {
-          if (existingLocal?.avatarUrl && !existingLocal.avatarUrl.includes('dicebear.com')) {
-            mapped.avatarUrl = existingLocal.avatarUrl;
-            saveAvatarToCache(userId, email, existingLocal.avatarUrl);
-          } else if (cachedPhoto) {
-            mapped.avatarUrl = cachedPhoto;
-          }
-        }
-
-        // Push real photo to Supabase if valid UUID so DB is kept in sync
-        if (mapped.avatarUrl && !mapped.avatarUrl.includes('dicebear.com') && userId.includes('-') && userId.length > 20) {
-          saveAvatarToCache(userId, email, mapped.avatarUrl);
-          supabase.from('profiles').update({ profile_photo_url: mapped.avatarUrl }).eq('id', userId).then(() => {});
         }
 
         const pendingOauthRole = (
@@ -613,19 +394,21 @@ class AuthService {
             await supabase.auth.signOut();
             this.session = null;
             this.currentProfile = null;
+            this.connectedPatient = null;
             localStorage.removeItem(SK_SESSION);
             this.notifyListeners();
-            alert(`This Google account (${email}) is already registered as a Patient. A Caregiver must use a separate Google account with a different email address.`);
+            alert(`This Google account (${email}) is already registered as a Patient. Please use a different Google account for the Caregiver account.`);
             window.location.href = window.location.origin;
             return null;
           }
-          if (pendingOauthRole === 'elderly' && mapped.role === 'caregiver') {
+          if ((pendingOauthRole === 'elderly' || (pendingOauthRole as string) === 'patient') && mapped.role === 'caregiver') {
             await supabase.auth.signOut();
             this.session = null;
             this.currentProfile = null;
+            this.connectedPatient = null;
             localStorage.removeItem(SK_SESSION);
             this.notifyListeners();
-            alert(`This Google account (${email}) is registered as a Caregiver. Please use the Caregiver Portal to sign in.`);
+            alert(`This Google account (${email}) is registered as a Caregiver. Please use a different Google account or sign in through the Caregiver Portal.`);
             window.location.href = window.location.origin;
             return null;
           }
@@ -636,40 +419,14 @@ class AuthService {
         sessionStorage.removeItem('ms_pending_oauth_role');
         localStorage.removeItem('ms_pending_oauth_role');
 
-        if (mapped.role === 'caregiver') {
-          mapped.hasCompletedOnboarding = true;
-          this.caregiverProfile = mapped;
-          this.currentProfile = mapped;
-          this.patientProfile = null;
-          localStorage.removeItem(SK_PATIENT_PROFILE);
-          localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(mapped));
-        } else if (mapped.role === 'elderly' || (mapped.role as string) === 'patient') {
-          this.patientProfile = mapped;
-          this.currentProfile = mapped;
-          this.caregiverProfile = null;
-          localStorage.removeItem(SK_CAREGIVER_PROFILE);
-          localStorage.setItem(SK_PATIENT_PROFILE, JSON.stringify(mapped));
-        } else {
-          this.currentProfile = mapped;
-        }
-
-        // Upsert into allProfiles cache
-        const idx = this.allProfiles.findIndex((p) => p.id === mapped.id);
-        if (idx >= 0) {
-          this.allProfiles[idx] = mapped;
-        } else {
-          this.allProfiles.unshift(mapped);
-        }
-        localStorage.setItem(SK_PROFILES, JSON.stringify(this.allProfiles));
-        offlineDb.profiles.put(mapped).catch(() => {});
-
+        this.currentProfile = mapped;
         this.session = makeSession(mapped, email);
         localStorage.setItem(SK_SESSION, JSON.stringify(this.session));
         this.notifyListeners();
         return mapped;
       }
 
-      // Profile row doesn't exist in DB yet — check if user designated a role prior to OAuth
+      // Profile row doesn't exist in DB yet — new Google user
       const authUser = (await supabase.auth.getUser()).data?.user;
       const metadata = authUser?.user_metadata || {};
       const pendingOauthRole = (
@@ -678,7 +435,7 @@ class AuthService {
       ) as UserRole | null;
       const pendingRole = pendingOauthRole || (metadata.role as UserRole);
 
-      // Check role collision with ANY existing profile in Supabase matching this email:
+      // Check role collision with ANY existing profile in Supabase matching this email
       const normalizedEmail = (email || '').trim().toLowerCase();
       if (normalizedEmail) {
         const { data: existingEmailProfile } = await supabase
@@ -700,7 +457,7 @@ class AuthService {
             window.location.href = window.location.origin;
             return null;
           }
-          if (pendingRole === 'elderly' && existingEmailProfile.role === 'caregiver') {
+          if ((pendingRole === 'elderly' || (pendingRole as string) === 'patient') && existingEmailProfile.role === 'caregiver') {
             localStorage.removeItem('ms_pending_oauth_role');
             sessionStorage.removeItem('ms_pending_oauth_role');
             await supabase.auth.signOut();
@@ -735,495 +492,7 @@ class AuthService {
 
   // ── Public API ──────────────────────────────────────────────────────────────
 
-  /**
-   * Sign in with email + password via Supabase Auth only.
-   * Hardcoded demo credentials and local mock logins have been completely removed.
-   */
-  public async login(credentials: AuthCredentials): Promise<AuthResult<AuthSession>> {
-    const { email, password, rememberMe, ayushmanMemberId } = credentials;
-    const normalizedEmail = email.trim().toLowerCase();
-
-    try {
-      const { data: sbData, error: sbError } = await supabase.auth.signInWithPassword({
-        email: normalizedEmail,
-        password,
-      });
-
-      if (sbError || !sbData?.user) {
-        return {
-          success: false,
-          error: { message: sbError?.message || 'Authentication failed. Please sign in with your verified Google Account.' },
-        };
-      }
-
-      const userId = sbData.user.id;
-      if (ayushmanMemberId?.trim()) {
-        try {
-          await supabase
-            .from('profiles')
-            .update({
-              is_ayushman_member: true,
-              ayushman_member_id: ayushmanMemberId.trim(),
-              ayushman_status: 'verified',
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', userId);
-        } catch (e) {
-          console.warn('[AuthService] Error updating Ayushman ID:', e);
-        }
-      }
-
-      const profile = await this.syncProfileFromSupabase(userId, normalizedEmail);
-      if (!profile) {
-        return {
-          success: false,
-          error: { message: 'Profile not found in database. Please sign in with your Google Account.' },
-        };
-      }
-
-      if (profile.role === 'caregiver') {
-        await this.logout();
-        return {
-          success: false,
-          error: { message: 'This account is registered as a Caregiver. Please use the Caregiver Portal to sign in.' },
-        };
-      }
-
-      this.session = makeSession(profile, normalizedEmail);
-      if (rememberMe) {
-        this.session.expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-      }
-      localStorage.setItem(SK_SESSION, JSON.stringify(this.session));
-      this.notifyListeners();
-      return { success: true, data: this.session };
-    } catch (err: any) {
-      return {
-        success: false,
-        error: { message: err.message || 'Login failed. Please sign in with Google.' },
-      };
-    }
-  }
-
-  /**
-   * Dedicated Caregiver Sign-In with Email & Password.
-   * Enforces strict role collision prevention:
-   * If this account was registered as a Patient, it CANNOT be used as a caregiver!
-   * Completely resilient to Supabase SMTP rate limits.
-   */
-  public async loginCaregiverWithEmailPassword(
-    email: string,
-    password: string
-  ): Promise<AuthResult<AuthSession>> {
-    const normalizedEmail = email.trim().toLowerCase();
-
-    if (!isGoogleEmail(normalizedEmail)) {
-      return {
-        success: false,
-        error: {
-          message: 'Caregiver sign-in requires a valid Google email address (@gmail.com or @googlemail.com).',
-        },
-      };
-    }
-
-    try {
-      // 1. Check existing role in Supabase profiles
-      const { data: existingProfile } = await supabase
-        .from('profiles')
-        .select('*')
-        .ilike('email', normalizedEmail)
-        .maybeSingle();
-
-      if (existingProfile) {
-        if (existingProfile.role === 'elderly' || (existingProfile.role as string) === 'patient') {
-          return {
-            success: false,
-            error: {
-              message: `This account (${normalizedEmail}) is registered as a Patient. A Caregiver must use a separate account with a different email address.`,
-            },
-          };
-        }
-      }
-
-      // 2. Sign in via Supabase Auth
-      let userId: string | null = null;
-      const { data: sbData, error: sbError } = await supabase.auth.signInWithPassword({
-        email: normalizedEmail,
-        password,
-      });
-
-      if (sbData?.user?.id) {
-        userId = sbData.user.id;
-      } else {
-        console.warn('[AuthService] Supabase caregiver signIn note:', sbError?.message);
-        // Fallback for rate-limited, SMTP-blocked, or locally cached credential
-        const localCred = findStoredCredential(normalizedEmail);
-        if (localCred && localCred.password === password) {
-          userId = localCred.userId;
-        } else if (existingProfile && existingProfile.role === 'caregiver') {
-          // If profile exists as caregiver and error was rate limit / unconfirmed email
-          userId = existingProfile.id;
-        } else {
-          return {
-            success: false,
-            error: { message: sbError?.message || 'Invalid caregiver email or password.' },
-          };
-        }
-      }
-
-      // 3. Verify / load caregiver profile
-      const finalUserId = userId || getDeterministicUserId(normalizedEmail);
-      let profile = await this.syncProfileFromSupabase(finalUserId, normalizedEmail);
-      if (!profile && existingProfile) {
-        profile = mapDbProfileToUser(existingProfile as Record<string, unknown>, normalizedEmail);
-      }
-
-      const activeCaregiverProfile: UserProfile = profile || {
-        id: finalUserId,
-        name: (existingProfile?.full_name as string) || normalizedEmail.split('@')[0],
-        preferredName:
-          ((existingProfile?.preferred_name as string) || (existingProfile?.full_name as string))?.split(' ')[0] ||
-          'Caregiver',
-        role: 'caregiver',
-        age: 35,
-        gender: 'other',
-        avatarUrl:
-          (existingProfile?.profile_photo_url as string) ||
-          `https://api.dicebear.com/9.x/avataaars/svg?seed=${finalUserId}&backgroundColor=b6e3f4`,
-        primaryLanguage: 'en',
-        city: 'Guwahati',
-        state: 'Assam',
-        northeastRegion: 'Assam',
-        isAyushmanMember: false,
-        ayushmanStatus: 'none',
-        pmjayStatus: 'none',
-        abhaStatus: 'none',
-        hasCompletedOnboarding: true,
-        caregiverIds: [],
-        clinicianIds: [],
-        accessibility: {
-          fontSize: 'normal',
-          highContrast: false,
-          textToSpeechAuto: false,
-          soundEffects: true,
-          speechRate: 0.85,
-        },
-        streakDays: 1,
-        totalXp: 100,
-        level: 1,
-        levelTitle: 'Active Caregiver',
-        createdAt: new Date().toISOString(),
-        email: normalizedEmail,
-      };
-
-      activeCaregiverProfile.role = 'caregiver';
-      activeCaregiverProfile.hasCompletedOnboarding = true;
-
-      this.session = makeSession(activeCaregiverProfile, normalizedEmail);
-      this.caregiverProfile = activeCaregiverProfile;
-      this.currentProfile = activeCaregiverProfile;
-      this.needsRoleSelection = false;
-      this.patientProfile = null;
-      localStorage.removeItem(SK_PATIENT_PROFILE);
-      localStorage.setItem(SK_SESSION, JSON.stringify(this.session));
-      localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(activeCaregiverProfile));
-      this.notifyListeners();
-      return { success: true, data: this.session };
-    } catch (err: any) {
-      return {
-        success: false,
-        error: { message: err.message || 'Caregiver sign-in failed.' },
-      };
-    }
-  }
-
-  /**
-   * Dedicated Caregiver Registration with Name, Email, Phone & Password.
-   * Enforces:
-   * 1. Must be a genuine Google email address (@gmail.com or @googlemail.com).
-   * 2. No role collisions (cannot be a Patient account).
-   * 3. Completely resilient to Supabase SMTP rate limits (429 Email rate limit exceeded).
-   * 4. Caregiver profile is immediately ready with hasCompletedOnboarding: true,
-   *    directly transitioning to the Patient Connection screen with NO extra profile setup!
-   */
-  public async registerCaregiverWithEmailPassword(payload: {
-    name: string;
-    email: string;
-    password: string;
-    phone?: string;
-  }): Promise<AuthResult<AuthSession>> {
-    const email = payload.email.trim().toLowerCase();
-    const fullName = payload.name.trim();
-
-    // 1. Enforce strict Google email validation
-    if (!isGoogleEmail(email)) {
-      return {
-        success: false,
-        error: {
-          message: 'Caregiver registration requires a valid Google email address (@gmail.com or @googlemail.com). Fake or temporary email addresses are not accepted.',
-        },
-      };
-    }
-
-    try {
-      // 2. Prevent role collision: check if email is registered as a Patient in profiles
-      const { data: existingProfile } = await supabase
-        .from('profiles')
-        .select('id, role, full_name')
-        .ilike('email', email)
-        .maybeSingle();
-
-      if (existingProfile) {
-        if (existingProfile.role === 'elderly' || (existingProfile.role as string) === 'patient') {
-          return {
-            success: false,
-            error: {
-              message: `This email (${email}) is already registered as a Patient. A Caregiver must register with a separate email address.`,
-            },
-          };
-        }
-      }
-
-      let userId: string | null = existingProfile?.id || null;
-
-      // 3. Attempt Supabase Auth sign up
-      const { data: sbData, error: sbError } = await supabase.auth.signUp({
-        email,
-        password: payload.password,
-        options: {
-          data: {
-            full_name: fullName,
-            role: 'caregiver',
-            mobile: payload.phone || '',
-          },
-        },
-      });
-
-      if (sbData?.user?.id) {
-        userId = sbData.user.id;
-      } else if (sbError) {
-        console.warn('[AuthService] Supabase caregiver signUp note:', sbError.message);
-
-        // Try direct signInWithPassword in case account was already created
-        const { data: signInData } = await supabase.auth.signInWithPassword({
-          email,
-          password: payload.password,
-        });
-
-        if (signInData?.user?.id) {
-          userId = signInData.user.id;
-        } else {
-          // If rate limited (HTTP 429 / 'Email rate limit exceeded') or unconfirmed email:
-          // Fall back gracefully to deterministic UUID so the caregiver is NEVER blocked!
-          userId = userId || getDeterministicUserId(email);
-        }
-      }
-
-      if (!userId) {
-        userId = getDeterministicUserId(email);
-      }
-
-      const photoUrl = `https://api.dicebear.com/9.x/avataaars/svg?seed=${userId}&backgroundColor=b6e3f4`;
-
-      // 4. Directly upsert caregiver profile into Supabase 'profiles' table
-      try {
-        await supabase.from('profiles').upsert({
-          id: userId,
-          email,
-          full_name: fullName,
-          preferred_name: fullName.split(' ')[0] || 'Caregiver',
-          role: 'caregiver',
-          profile_photo_url: photoUrl,
-          phone: payload.phone || '',
-          has_completed_onboarding: true,
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'id' });
-      } catch (upsertErr) {
-        console.warn('[AuthService] Caregiver profile upsert note:', upsertErr);
-      }
-
-      // Save credentials for rate-limited / offline sign-in resilience
-      saveStoredCredential({
-        email,
-        password: payload.password,
-        userId,
-        role: 'caregiver',
-        mobile: payload.phone || '',
-        createdAt: new Date().toISOString(),
-      });
-
-      // 5. Construct Caregiver Profile directly - ZERO EXTRA PROFILE SETUP REQUIRED!
-      const caregiverProfile: UserProfile = {
-        id: userId,
-        name: fullName,
-        preferredName: fullName.split(' ')[0] || 'Caregiver',
-        role: 'caregiver',
-        age: 35,
-        gender: 'other',
-        avatarUrl: photoUrl,
-        primaryLanguage: 'en',
-        city: 'Guwahati',
-        state: 'Assam',
-        northeastRegion: 'Assam',
-        isAyushmanMember: false,
-        ayushmanStatus: 'none',
-        pmjayStatus: 'none',
-        abhaStatus: 'none',
-        hasCompletedOnboarding: true, // Immediate onboarding completion
-        caregiverIds: [],
-        clinicianIds: [],
-        accessibility: {
-          fontSize: 'normal',
-          highContrast: false,
-          textToSpeechAuto: false,
-          soundEffects: true,
-          speechRate: 0.85,
-        },
-        streakDays: 1,
-        totalXp: 100,
-        level: 1,
-        levelTitle: 'Active Caregiver',
-        createdAt: new Date().toISOString(),
-        email,
-        phone: payload.phone || '',
-      };
-
-      const session = makeSession(caregiverProfile, email, payload.phone || '');
-      this.session = session;
-      this.caregiverProfile = caregiverProfile;
-      this.currentProfile = caregiverProfile;
-      this.needsRoleSelection = false;
-      this.pendingGoogleUser = null;
-
-      // Update allProfiles cache
-      const idx = this.allProfiles.findIndex((p) => p.id === userId || (p.email && p.email.toLowerCase() === email));
-      if (idx >= 0) {
-        this.allProfiles[idx] = caregiverProfile;
-      } else {
-        this.allProfiles.unshift(caregiverProfile);
-      }
-
-      this.patientProfile = null;
-      localStorage.removeItem(SK_PATIENT_PROFILE);
-      localStorage.setItem(SK_SESSION, JSON.stringify(session));
-      localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(caregiverProfile));
-      localStorage.setItem(SK_PROFILES, JSON.stringify(this.allProfiles));
-      offlineDb.profiles.put(caregiverProfile).catch(() => {});
-
-      this.notifyListeners();
-      return { success: true, data: session };
-    } catch (err: any) {
-      return {
-        success: false,
-        error: { message: err.message || 'Caregiver registration failed.' },
-      };
-    }
-  }
-
-  /** Register an account via Supabase Auth & profiles table only. Resilient against email rate limits. */
-  public async register(payload: RegisterPayload): Promise<AuthResult<AuthSession>> {
-    const email = payload.email.trim().toLowerCase();
-
-    try {
-      let userId: string | null = null;
-      const { data: sbData, error: sbError } = await supabase.auth.signUp({
-        email,
-        password: payload.password,
-        options: {
-          data: {
-            full_name: payload.name.trim(),
-            role: payload.role,
-            mobile: payload.mobile,
-          },
-        },
-      });
-
-      if (sbData?.user?.id) {
-        userId = sbData.user.id;
-      } else if (sbError) {
-        console.warn('[AuthService] Supabase patient signUp note:', sbError.message);
-        const { data: signInData } = await supabase.auth.signInWithPassword({
-          email,
-          password: payload.password,
-        });
-
-        if (signInData?.user?.id) {
-          userId = signInData.user.id;
-        } else {
-          // If rate limited or unconfirmed email, fall back to deterministic UUID
-          userId = getDeterministicUserId(email);
-        }
-      }
-
-      if (!userId) {
-        userId = getDeterministicUserId(email);
-      }
-
-      const connectionCode = generateConnectionCode();
-      const photoUrl = payload.avatarUrl || `https://api.dicebear.com/9.x/avataaars/svg?seed=${userId}&backgroundColor=b6e3f4`;
-
-      try {
-        await supabase.from('profiles').upsert({
-          id: userId,
-          email,
-          full_name: payload.name.trim(),
-          preferred_name: payload.name.trim().split(' ')[0],
-          role: payload.role === 'elderly' ? 'patient' : payload.role,
-          connection_code: connectionCode,
-          profile_photo_url: photoUrl,
-          phone: payload.mobile,
-          is_ayushman_member: payload.isAyushmanMember ?? false,
-          ayushman_member_id: payload.ayushmanMemberId ?? null,
-          ayushman_status: payload.isAyushmanMember && payload.ayushmanMemberId ? 'verified' : 'none',
-          has_completed_onboarding: payload.role !== 'elderly',
-          accessibility: {
-            fontSize: 'normal',
-            highContrast: false,
-            textToSpeechAuto: false,
-            soundEffects: true,
-            speechRate: 0.85,
-          },
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        }, { onConflict: 'id' });
-      } catch (upsertErr) {
-        console.warn('[AuthService] Profile upsert error:', upsertErr);
-      }
-
-      // Save credential for offline / rate-limited re-login
-      saveStoredCredential({
-        email,
-        password: payload.password,
-        userId,
-        role: payload.role === 'elderly' ? 'elderly' : (payload.role as any),
-        mobile: payload.mobile,
-        createdAt: new Date().toISOString(),
-      });
-
-      const profile = await this.syncProfileFromSupabase(userId, email);
-      if (!profile) {
-        return {
-          success: false,
-          error: { message: 'Failed to initialize profile. Please sign in with Google.' },
-        };
-      }
-
-      // Link any family members created before/during signup
-      familyService.linkFamilyMembersToPatient(profile.id, email);
-
-      const session = makeSession(profile, email, payload.mobile);
-      this.session = session;
-      localStorage.setItem(SK_SESSION, JSON.stringify(session));
-      this.notifyListeners();
-      return { success: true, data: session };
-    } catch (err: any) {
-      return {
-        success: false,
-        error: { message: err.message || 'Registration failed.' },
-      };
-    }
-  }
-
-  /** Sign out and clear active session. Preserves credentials and profiles for re-login. */
+  /** Sign out and clear active session. Preserves all database data. */
   public async logout(): Promise<void> {
     try {
       await supabase.auth.signOut();
@@ -1232,8 +501,7 @@ class AuthService {
     }
     this.session = null;
     this.currentProfile = null;
-    this.patientProfile = null;
-    this.caregiverProfile = null;
+    this.connectedPatient = null;
     this.needsRoleSelection = false;
     this.pendingGoogleUser = null;
     sessionStorage.removeItem('ms_pending_oauth_role');
@@ -1241,8 +509,6 @@ class AuthService {
     localStorage.removeItem(SK_SESSION);
     localStorage.removeItem(SK_PATIENT_PROFILE);
     localStorage.removeItem(SK_CAREGIVER_PROFILE);
-    // Note: Do NOT remove ms_local_credentials or ms_all_profiles,
-    // and NEVER delete any records from database!
     this.notifyListeners();
   }
 
@@ -1256,181 +522,58 @@ class AuthService {
     return { success: true };
   }
 
-  // ── Accessors ──────────────────────────────────────────────────────────────
+  // ── Accessors & State ──────────────────────────────────────────────────────
 
   /**
-   * Resolves and sets the strictly connected single patient for a caregiver account.
-   * Checks local storage, allProfiles, and Supabase caregiver_patient table.
+   * Sets the currently connected elderly patient for caregiver oversight.
+   * STRICT FIX: This NEVER mutates this.currentProfile.
+   * The authenticated user remains the caregiver!
    */
-  public async resolveConnectedPatientForCaregiver(
-    caregiverId: string,
-    caregiverEmail?: string
-  ): Promise<UserProfile | null> {
-    try {
-      // 1. Check local storage cache
-      let cachedRaw = localStorage.getItem(`mind_sathi_caregiver_patient_${caregiverId}`);
-      if (!cachedRaw && caregiverEmail) {
-        cachedRaw = localStorage.getItem(`mind_sathi_caregiver_patient_${caregiverEmail.toLowerCase()}`);
-      }
-      if (cachedRaw) {
-        const parsed = JSON.parse(cachedRaw);
-        if (Array.isArray(parsed) && parsed.length > 0 && isRealProfile(parsed[0])) {
-          this.setLinkedPatient(parsed[0]);
-          return parsed[0];
-        }
-      }
-
-      // 2. Check allProfiles where caregiverIds includes caregiverId
-      const linkedInProfiles = this.allProfiles.find(
-        (p) =>
-          (p.role === 'elderly' || (p.role as string) === 'patient') &&
-          isRealProfile(p) &&
-          p.caregiverIds &&
-          (p.caregiverIds.includes(caregiverId) ||
-            (caregiverEmail && p.caregiverIds.includes(caregiverEmail.toLowerCase())))
-      );
-      if (linkedInProfiles) {
-        this.setLinkedPatient(linkedInProfiles);
-        return linkedInProfiles;
-      }
-
-      // 3. Check Supabase caregiver_patient table
-      const { data: linkRows } = await supabase
-        .from('caregiver_patient')
-        .select('patient_id')
-        .eq('caregiver_id', caregiverId)
-        .limit(1);
-
-      if (linkRows && linkRows.length > 0 && linkRows[0].patient_id) {
-        const { data: ptData } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', linkRows[0].patient_id)
-          .maybeSingle();
-
-        if (ptData && !ptData.id.startsWith('elder-')) {
-          const ptProfile = await this.syncProfileFromSupabase(ptData.id, ptData.email);
-          if (ptProfile) {
-            this.setLinkedPatient(ptProfile);
-            return ptProfile;
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('[AuthService] resolveConnectedPatientForCaregiver notice:', e);
-    }
-    return null;
-  }
-
-  /**
-   * Sets or updates the currently linked elderly patient.
-   * Ensures the patient remains the active profile for the Home Page and main app.
-   */
-  public setLinkedPatient(patient: UserProfile) {
-    if (!patient || !isRealProfile(patient)) return;
-    this.patientProfile = patient;
-    this.currentProfile = patient;
-    localStorage.setItem(SK_PATIENT_PROFILE, JSON.stringify(patient));
-
-    const idx = this.allProfiles.findIndex((p) => p.id === patient.id);
-    if (idx >= 0) {
-      this.allProfiles[idx] = patient;
-    } else {
-      this.allProfiles.unshift(patient);
-    }
-    localStorage.setItem(SK_PROFILES, JSON.stringify(this.allProfiles));
-    offlineDb.profiles.put(patient).catch(() => {});
+  public setLinkedPatient(patient: UserProfile | null) {
+    this.connectedPatient = patient;
     this.notifyListeners();
   }
 
+  public getLinkedPatient(): UserProfile | null {
+    return this.connectedPatient;
+  }
+
+  /**
+   * Retrieves the authenticated user's profile.
+   * Derives strictly from Supabase session.
+   */
+  public getCurrentUser(_contextTab?: string): UserProfile | null {
+    return this.currentProfile;
+  }
+
   public getPatientProfile(): UserProfile | null {
-    if (this.patientProfile && isRealProfile(this.patientProfile)) return this.patientProfile;
-    try {
-      const stored = localStorage.getItem(SK_PATIENT_PROFILE);
-      if (stored) {
-        const parsed = JSON.parse(stored) as UserProfile;
-        if (isRealProfile(parsed)) {
-          this.patientProfile = parsed;
-          return parsed;
-        }
-      }
-    } catch {}
-    const inAll = this.allProfiles.find((p) => (p.role === 'elderly' || (p.role as string) === 'patient') && isRealProfile(p));
-    if (inAll) {
-      this.patientProfile = inAll;
-      return inAll;
+    if (this.currentProfile && (this.currentProfile.role === 'elderly' || (this.currentProfile.role as string) === 'patient')) {
+      return this.currentProfile;
     }
-    return this.currentProfile?.role === 'elderly' ? this.currentProfile : null;
+    return this.connectedPatient;
   }
 
   public getCaregiverProfile(): UserProfile | null {
-    if (this.caregiverProfile && isRealProfile(this.caregiverProfile)) return this.caregiverProfile;
-    try {
-      const stored = localStorage.getItem(SK_CAREGIVER_PROFILE);
-      if (stored) {
-        const parsed = JSON.parse(stored) as UserProfile;
-        if (isRealProfile(parsed)) {
-          this.caregiverProfile = parsed;
-          return parsed;
-        }
-      }
-    } catch {}
-    // If the authenticated user is actually a caregiver, return that profile
-    if (this.currentProfile?.role === 'caregiver' && isRealProfile(this.currentProfile)) {
+    if (this.currentProfile && this.currentProfile.role === 'caregiver') {
       return this.currentProfile;
     }
     return null;
   }
 
-  /**
-   * Retrieves the current user profile.
-   * If contextTab is 'caregiver':
-   * - If a caregiver profile is authenticated, returns the caregiver profile.
-   * - If an elderly patient is authenticated and navigates to the caregiver tab,
-   *   returns the elderly patient so the portal can show patient-caregiver connection status.
-   * - Never returns a fake fallback caregiver!
-   * For Home Page and all other screens, returns the Patient profile.
-   */
-  public getCurrentUser(contextTab?: string): UserProfile | null {
-    // 1. If active authenticated session is for a caregiver, strictly return the caregiver profile!
-    if (this.session?.user?.role === 'caregiver') {
-      if (this.currentProfile && this.currentProfile.role === 'caregiver') {
-        return this.currentProfile;
-      }
-      const cg = this.getCaregiverProfile();
-      if (cg) {
-        this.currentProfile = cg;
-        return cg;
-      }
-      const inAll = this.allProfiles.find((p) => p.id === this.session!.user.id || p.role === 'caregiver');
-      if (inAll) {
-        this.currentProfile = inAll;
-        return inAll;
-      }
+  public getAllProfiles(): UserProfile[] {
+    const list: UserProfile[] = [];
+    if (this.currentProfile) list.push(this.currentProfile);
+    if (this.connectedPatient && this.connectedPatient.id !== this.currentProfile?.id) {
+      list.push(this.connectedPatient);
     }
+    return list;
+  }
 
-    if (this.currentProfile?.role === 'caregiver') {
+  public switchUser(userId: string): UserProfile | null {
+    if (this.currentProfile && this.currentProfile.id === userId) {
       return this.currentProfile;
     }
-
-    if (contextTab === 'caregiver') {
-      const cg = this.getCaregiverProfile();
-      if (cg) return cg;
-      if (this.currentProfile && (this.currentProfile.role === 'elderly' || (this.currentProfile.role as string) === 'patient')) {
-        return this.currentProfile;
-      }
-      return null;
-    } else {
-      // Home page, games, daily-plan, progress, etc. (only if NOT caregiver session)
-      if (this.session?.user?.role !== 'caregiver') {
-        const pt = this.getPatientProfile();
-        if (pt) return pt;
-      }
-    }
-
-    if (this.currentProfile) return this.currentProfile;
-    if (!this.session) return null;
-    return this.allProfiles.find((p) => p.id === this.session!.user.id) ?? null;
+    return null;
   }
 
   public getAuthSession(): AuthSession | null {
@@ -1438,34 +581,12 @@ class AuthService {
   }
 
   public isAuthenticated(): boolean {
-    return this.session !== null;
+    return Boolean(this.session && this.currentProfile);
   }
 
-  public getAllProfiles(): UserProfile[] {
-    return this.allProfiles;
-  }
-
-  public getProfilesByRole(role: UserRole): UserProfile[] {
-    return this.allProfiles.filter((p) => p.role === role);
-  }
-
-  /** Dev-only: switch to any cached profile without re-authenticating. */
-  public switchUser(userId: string): UserProfile {
-    const target = this.allProfiles.find((p) => p.id === userId);
-    if (target) {
-      this.currentProfile = target;
-      const email = `${target.role}@mindsathi.in`;
-      this.session = makeSession(target, email);
-      localStorage.setItem(SK_SESSION, JSON.stringify(this.session));
-      this.notifyListeners();
-      return target;
-    }
-    return this.getCurrentUser() ?? this.allProfiles[0];
-  }
-
-  /** Update current user profile locally and push to Supabase asynchronously. */
+  /** Update current user profile and push to Supabase. */
   public updateCurrentUserProfile(updates: Partial<UserProfile>): UserProfile {
-    const current = this.getCurrentUser();
+    const current = this.currentProfile;
     if (!current) throw new Error('No authenticated user.');
     const updated = { ...current, ...updates };
 
@@ -1474,15 +595,6 @@ class AuthService {
     }
 
     this.currentProfile = updated;
-    if (updated.role === 'elderly' || (updated.role as string) === 'patient') {
-      this.patientProfile = updated;
-      localStorage.setItem(SK_PATIENT_PROFILE, JSON.stringify(updated));
-    } else if (updated.role === 'caregiver') {
-      this.caregiverProfile = updated;
-      localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(updated));
-    }
-    this.allProfiles = this.allProfiles.map((p) => (p.id === updated.id ? updated : p));
-    localStorage.setItem(SK_PROFILES, JSON.stringify(this.allProfiles));
     offlineDb.profiles.put(updated).catch(() => {});
 
     if (updated.id.includes('-') && updated.id.length > 20) {
@@ -1513,7 +625,7 @@ class AuthService {
         level_title: updated.levelTitle,
         updated_at: new Date().toISOString(),
       }).then(({ error }) => {
-        if (error) console.warn('[AuthService] Profile upsert error:', error.message);
+        if (error) console.warn('[AuthService] Profile update error:', error.message);
       });
     }
 

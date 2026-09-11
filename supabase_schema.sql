@@ -58,10 +58,11 @@ CREATE TABLE IF NOT EXISTS public.caregiver_patient (
   patient_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   caregiver_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
   relationship TEXT DEFAULT 'Caregiver',
-  status TEXT DEFAULT 'approved' CHECK (status IN ('pending', 'approved', 'rejected')),
+  status TEXT DEFAULT 'approved' CHECK (status IN ('pending', 'approved', 'rejected', 'disconnected')),
   connection_code TEXT,
   created_at TIMESTAMPTZ DEFAULT now(),
   approved_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now(),
   CONSTRAINT uq_caregiver_patient UNIQUE (patient_id, caregiver_id),
   CONSTRAINT uq_one_caregiver_per_patient UNIQUE (patient_id),
   CONSTRAINT uq_one_patient_per_caregiver UNIQUE (caregiver_id)
@@ -361,4 +362,72 @@ CREATE POLICY "Patients can delete own home location"
   ON public.patient_locations FOR DELETE
   TO authenticated
   USING (patient_id = auth.uid());
+
+CREATE POLICY "Caregivers can view connected patient home location"
+  ON public.patient_locations FOR SELECT
+  TO authenticated
+  USING (
+    EXISTS (
+      SELECT 1 FROM public.caregiver_patient cp
+      WHERE cp.caregiver_id = auth.uid()
+        AND cp.patient_id = public.patient_locations.patient_id
+        AND cp.status = 'approved'
+    )
+  );
+
+-- ------------------------------------------------------------------------------
+-- 10. LIVE LOCATION SESSIONS & TRACKING TABLE
+-- ------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.live_location_sessions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  patient_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  caregiver_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'requested' CHECK (status IN ('requested', 'approved', 'active', 'ended', 'rejected')),
+  started_at TIMESTAMPTZ DEFAULT now(),
+  expires_at TIMESTAMPTZ DEFAULT (now() + interval '1 hour'),
+  ended_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.live_locations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id UUID NOT NULL REFERENCES public.live_location_sessions(id) ON DELETE CASCADE,
+  patient_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  latitude DOUBLE PRECISION NOT NULL,
+  longitude DOUBLE PRECISION NOT NULL,
+  accuracy_meters DOUBLE PRECISION,
+  recorded_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE public.live_location_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.live_locations ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Patient or Caregiver can view their live location sessions"
+  ON public.live_location_sessions FOR SELECT
+  TO authenticated
+  USING (patient_id = auth.uid() OR caregiver_id = auth.uid());
+
+CREATE POLICY "Patient or Caregiver can manage their live location sessions"
+  ON public.live_location_sessions FOR ALL
+  TO authenticated
+  USING (patient_id = auth.uid() OR caregiver_id = auth.uid())
+  WITH CHECK (patient_id = auth.uid() OR caregiver_id = auth.uid());
+
+CREATE POLICY "Patient can insert live location coordinates"
+  ON public.live_locations FOR INSERT
+  TO authenticated
+  WITH CHECK (patient_id = auth.uid());
+
+CREATE POLICY "Authorized Caregiver can view patient live locations"
+  ON public.live_locations FOR SELECT
+  TO authenticated
+  USING (
+    patient_id = auth.uid()
+    OR EXISTS (
+      SELECT 1 FROM public.live_location_sessions lls
+      WHERE lls.id = public.live_locations.session_id
+        AND lls.caregiver_id = auth.uid()
+        AND lls.status IN ('approved', 'active')
+    )
+  );
 

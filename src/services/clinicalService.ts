@@ -1,6 +1,6 @@
 import { CognitiveTrendPoint, MocaMmseMapping } from '../types/analytics';
 import { gameService } from './gameService';
-import { authService, isRealProfile, DEFAULT_PROFILES } from './authService';
+import { authService, isRealProfile } from './authService';
 import { offlineDb } from '../lib/offlineDb';
 import { supabase } from '../lib/supabase';
 import { UserProfile } from '../types/user';

@@ -12,7 +12,7 @@
 import { supabase } from '../lib/supabase';
 import { offlineDb } from '../lib/offlineDb';
 import { UserProfile, UserRole } from '../types/user';
-import { authService, DEFAULT_PROFILES, isRealProfile } from './authService';
+import { authService, isRealProfile } from './authService';
 import { gameService } from './gameService';
 import { GameSession } from '../types/game';
 
@@ -119,10 +119,7 @@ class AdminService {
     }
 
     // Retrieve or construct admin profile
-    let adminProfile = authService.getAllProfiles().find((p) => p.role === 'admin');
-    if (!adminProfile) {
-      adminProfile = DEFAULT_PROFILES.find((p) => p.role === 'admin');
-    }
+    let adminProfile = authService.getAllProfiles().find((p: UserProfile) => p.role === 'admin');
 
     if (!adminProfile) {
       adminProfile = {
