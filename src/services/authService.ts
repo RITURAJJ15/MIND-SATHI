@@ -338,7 +338,17 @@ function mapDbProfileToUser(dbRow: Record<string, unknown>, email = ''): UserPro
     createdAt: (dbRow.created_at as string) || new Date().toISOString(),
     email: email || (dbRow.email as string) || '',
     phone: (dbRow.phone as string) || '',
+    connectionCode: (dbRow.connection_code as string) || undefined,
   } as UserProfile;
+}
+
+export function generateConnectionCode(): string {
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  let result = 'MS-';
+  for (let i = 0; i < 6; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
 }
 
 function profileToAuthUser(profile: UserProfile, email: string, mobile = ''): AuthUser {
@@ -370,6 +380,8 @@ class AuthService {
   private caregiverProfile: UserProfile | null = null;
   private allProfiles: UserProfile[] = [];
   private listeners: Set<(session: AuthSession | null) => void> = new Set();
+  private needsRoleSelection: boolean = false;
+  private pendingGoogleUser: any = null;
   /** Resolves once the Supabase session check on startup is complete. */
   public readonly ready: Promise<void>;
   private _resolveReady!: () => void;
@@ -480,6 +492,175 @@ class AuthService {
     }
   }
 
+  public getNeedsRoleSelection(): boolean {
+    return this.needsRoleSelection;
+  }
+
+  public getPendingGoogleUser(): any {
+    return this.pendingGoogleUser;
+  }
+
+  /**
+   * Initiates real Supabase Google OAuth.
+   * Redirects user to Google OAuth consent screen.
+   */
+  public async signInWithGoogle(intendedRole?: UserRole): Promise<{ success: boolean; error?: string }> {
+    try {
+      if (intendedRole) {
+        sessionStorage.setItem('ms_pending_oauth_role', intendedRole);
+      } else {
+        sessionStorage.removeItem('ms_pending_oauth_role');
+      }
+
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin,
+          queryParams: {
+            access_type: 'offline',
+            prompt: 'select_account',
+          },
+        },
+      });
+
+      if (error) {
+        return { success: false, error: error.message };
+      }
+      return { success: true };
+    } catch (err: any) {
+      console.error('[AuthService] signInWithGoogle error:', err);
+      return { success: false, error: err.message || 'Google Sign-In failed to initialize.' };
+    }
+  }
+
+  /**
+   * Completes Google onboarding by creating the permanent profile with the selected role.
+   */
+  public async completeGoogleProfile(role: UserRole, details?: Partial<UserProfile>): Promise<UserProfile | null> {
+    try {
+      const authUser = (await supabase.auth.getUser()).data?.user || this.pendingGoogleUser;
+      if (!authUser || !authUser.id) {
+        console.error('[AuthService] completeGoogleProfile: No Supabase user authenticated.');
+        return null;
+      }
+
+      const userId = authUser.id;
+      const email = authUser.email || '';
+      const meta = authUser.user_metadata || {};
+      const fullName = details?.name?.trim() || meta.full_name || meta.name || email.split('@')[0] || 'MIND SATHI User';
+      const preferredName = details?.preferredName?.trim() || fullName.split(' ')[0] || 'Sathi';
+      const rawPhoto = details?.avatarUrl || meta.avatar_url || meta.picture;
+      const photoUrl = rawPhoto || getAvatarFromCache(userId, email) || `https://api.dicebear.com/9.x/avataaars/svg?seed=${userId}&backgroundColor=b6e3f4`;
+      const connectionCode = generateConnectionCode();
+
+      const newProfile: UserProfile = {
+        id: userId,
+        name: fullName,
+        preferredName: preferredName,
+        role,
+        age: details?.age ?? (role === 'elderly' ? 70 : 35),
+        gender: details?.gender ?? 'other',
+        avatarUrl: photoUrl,
+        primaryLanguage: details?.primaryLanguage ?? 'en',
+        city: details?.city ?? 'Guwahati',
+        state: details?.state ?? 'Assam',
+        northeastRegion: details?.northeastRegion ?? 'Assam',
+        isAyushmanMember: details?.isAyushmanMember ?? false,
+        ayushmanMemberId: details?.ayushmanMemberId,
+        ayushmanStatus: details?.ayushmanStatus ?? 'none',
+        pmjayStatus: 'none',
+        abhaId: details?.abhaId,
+        abhaStatus: details?.abhaStatus ?? 'none',
+        hasCompletedOnboarding: role !== 'elderly',
+        familyMemberCount: 0,
+        caregiverIds: [],
+        clinicianIds: [],
+        accessibility: {
+          fontSize: 'normal',
+          highContrast: false,
+          textToSpeechAuto: false,
+          soundEffects: true,
+          speechRate: 0.85,
+        },
+        streakDays: 1,
+        totalXp: 50,
+        level: 1,
+        levelTitle: 'Naya Sathi',
+        createdAt: new Date().toISOString(),
+        email,
+        phone: details?.phone || meta.phone || (meta.mobile as string) || '',
+        connectionCode,
+      };
+
+      if (photoUrl && !photoUrl.includes('dicebear.com')) {
+        saveAvatarToCache(userId, email, photoUrl);
+      }
+
+      // Upsert into Supabase profiles table
+      try {
+        await supabase.from('profiles').upsert({
+          id: userId,
+          email,
+          full_name: fullName,
+          preferred_name: preferredName,
+          role: role === 'elderly' ? 'patient' : role,
+          profile_photo_url: photoUrl,
+          connection_code: connectionCode,
+          age: newProfile.age,
+          gender: newProfile.gender,
+          preferred_language: newProfile.primaryLanguage,
+          city: newProfile.city,
+          state: newProfile.state,
+          northeast_region: newProfile.northeastRegion,
+          is_ayushman_member: newProfile.isAyushmanMember,
+          ayushman_member_id: newProfile.ayushmanMemberId,
+          ayushman_status: newProfile.ayushmanStatus,
+          abha_id: newProfile.abhaId,
+          abha_status: newProfile.abhaStatus,
+          has_completed_onboarding: newProfile.hasCompletedOnboarding,
+          accessibility: newProfile.accessibility,
+          created_at: newProfile.createdAt,
+          updated_at: new Date().toISOString(),
+        });
+      } catch (upsertErr) {
+        console.warn('[AuthService] completeGoogleProfile Supabase upsert note:', upsertErr);
+      }
+
+      this.needsRoleSelection = false;
+      this.pendingGoogleUser = null;
+      sessionStorage.removeItem('ms_pending_oauth_role');
+
+      if (role === 'elderly' || (role as string) === 'patient') {
+        this.patientProfile = newProfile;
+        localStorage.setItem(SK_PATIENT_PROFILE, JSON.stringify(newProfile));
+        this.currentProfile = newProfile;
+      } else if (role === 'caregiver') {
+        this.caregiverProfile = newProfile;
+        localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(newProfile));
+        this.currentProfile = newProfile;
+      } else {
+        this.currentProfile = newProfile;
+      }
+
+      const idx = this.allProfiles.findIndex((p) => p.id === userId);
+      if (idx >= 0) {
+        this.allProfiles[idx] = newProfile;
+      } else {
+        this.allProfiles.unshift(newProfile);
+      }
+      localStorage.setItem(SK_PROFILES, JSON.stringify(this.allProfiles));
+      offlineDb.profiles.put(newProfile).catch(() => {});
+
+      this.session = makeSession(newProfile, email);
+      localStorage.setItem(SK_SESSION, JSON.stringify(this.session));
+      this.notifyListeners();
+      return newProfile;
+    } catch (err) {
+      console.error('[AuthService] completeGoogleProfile exception:', err);
+      return null;
+    }
+  }
+
   private async syncProfileFromSupabase(userId: string, email: string): Promise<UserProfile | null> {
     try {
       const { data: dbProfile, error } = await supabase
@@ -489,10 +670,16 @@ class AuthService {
         .maybeSingle();
 
       if (dbProfile && !error) {
-        const mapped = mapDbProfileToUser(dbProfile as Record<string, unknown>, email);
+        let mapped = mapDbProfileToUser(dbProfile as Record<string, unknown>, email);
+
+        // Ensure connectionCode is populated
+        if (!mapped.connectionCode) {
+          const generatedCode = generateConnectionCode();
+          mapped.connectionCode = generatedCode;
+          supabase.from('profiles').update({ connection_code: generatedCode }).eq('id', userId).then(() => {});
+        }
 
         // Preserve hasCompletedOnboarding=true if the user just completed onboarding
-        // (DB write may still be in flight when onAuthStateChange fires SIGNED_IN)
         const existingLocal = this.allProfiles.find((p) => p.id === userId || (p.email && p.email.toLowerCase() === email.toLowerCase()));
         if (existingLocal?.hasCompletedOnboarding && !mapped.hasCompletedOnboarding) {
           mapped.hasCompletedOnboarding = true;
@@ -515,6 +702,10 @@ class AuthService {
           supabase.from('profiles').update({ profile_photo_url: mapped.avatarUrl }).eq('id', userId).then(() => {});
         }
 
+        this.needsRoleSelection = false;
+        this.pendingGoogleUser = null;
+        sessionStorage.removeItem('ms_pending_oauth_role');
+
         if (mapped.role === 'elderly' || (mapped.role as string) === 'patient') {
           this.patientProfile = mapped;
           localStorage.setItem(SK_PATIENT_PROFILE, JSON.stringify(mapped));
@@ -523,11 +714,12 @@ class AuthService {
           localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(mapped));
         }
 
-        // Keep currentProfile as patientProfile if one exists so Home Page stays as the patient
-        if (!this.patientProfile || mapped.role === 'elderly') {
+        if (mapped.role === 'caregiver') {
+          this.currentProfile = mapped;
+        } else if (mapped.role === 'elderly') {
           this.currentProfile = mapped;
         } else {
-          this.currentProfile = this.patientProfile;
+          this.currentProfile = mapped;
         }
 
         // Upsert into allProfiles cache
@@ -546,17 +738,28 @@ class AuthService {
         return mapped;
       }
 
-      // Profile row doesn't exist in DB yet — create from Supabase Auth user metadata
+      // Profile row doesn't exist in DB yet — check if user designated a role prior to OAuth
       const authUser = (await supabase.auth.getUser()).data?.user;
       const metadata = authUser?.user_metadata || {};
-      const fallbackProfile: UserProfile = this.allProfiles.find((p) => p.id === userId) || {
+      const pendingRole = (sessionStorage.getItem('ms_pending_oauth_role') as UserRole) || (metadata.role as UserRole);
+
+      if (pendingRole) {
+        sessionStorage.removeItem('ms_pending_oauth_role');
+        return await this.completeGoogleProfile(pendingRole);
+      }
+
+      // New Google User: Prompt for role selection
+      this.pendingGoogleUser = authUser || { id: userId, email, user_metadata: metadata };
+      this.needsRoleSelection = true;
+
+      const tempProfile: UserProfile = {
         id: userId,
-        name: (metadata.full_name as string) || email.split('@')[0] || 'MIND SATHI User',
-        preferredName: ((metadata.full_name as string)?.split(' ')[0]) || email.split('@')[0] || 'Sathi',
-        role: (metadata.role as UserRole) || 'elderly',
+        name: (metadata.full_name as string) || (metadata.name as string) || email.split('@')[0] || 'MIND SATHI User',
+        preferredName: ((metadata.full_name as string) || (metadata.name as string) || email.split('@')[0])?.split(' ')[0] || 'Sathi',
+        role: 'elderly',
         age: 70,
         gender: 'other',
-        avatarUrl: `https://api.dicebear.com/9.x/avataaars/svg?seed=${userId}&backgroundColor=b6e3f4`,
+        avatarUrl: (metadata.avatar_url as string) || (metadata.picture as string) || `https://api.dicebear.com/9.x/avataaars/svg?seed=${userId}&backgroundColor=b6e3f4`,
         primaryLanguage: 'en',
         city: 'Guwahati',
         state: 'Assam',
@@ -565,7 +768,7 @@ class AuthService {
         ayushmanStatus: 'none',
         pmjayStatus: 'none',
         abhaStatus: 'none',
-        hasCompletedOnboarding: metadata.role !== 'elderly',
+        hasCompletedOnboarding: false,
         caregiverIds: [],
         clinicianIds: [],
         accessibility: { fontSize: 'normal', highContrast: false, textToSpeechAuto: false, soundEffects: true, speechRate: 0.85 },
@@ -574,41 +777,15 @@ class AuthService {
         level: 1,
         levelTitle: 'Naya Sathi',
         createdAt: new Date().toISOString(),
+        email,
       };
 
-      // Try to upsert row into profiles table in DB
-      try {
-        await supabase.from('profiles').upsert({
-          id: userId,
-          email,
-          full_name: fallbackProfile.name,
-          preferred_name: fallbackProfile.preferredName,
-          role: fallbackProfile.role,
-          phone: (metadata.mobile as string) || '',
-          has_completed_onboarding: fallbackProfile.hasCompletedOnboarding,
-          accessibility: fallbackProfile.accessibility,
-          created_at: fallbackProfile.createdAt,
-          updated_at: new Date().toISOString(),
-        });
-      } catch (upsertErr) {
-        console.warn('[AuthService] Profile upsert error:', upsertErr);
-      }
-
-      this.currentProfile = fallbackProfile;
-      const idx = this.allProfiles.findIndex((p) => p.id === userId);
-      if (idx >= 0) {
-        this.allProfiles[idx] = fallbackProfile;
-      } else {
-        this.allProfiles.unshift(fallbackProfile);
-      }
-      localStorage.setItem(SK_PROFILES, JSON.stringify(this.allProfiles));
-
-      this.session = makeSession(fallbackProfile, email);
-      localStorage.setItem(SK_SESSION, JSON.stringify(this.session));
+      this.currentProfile = tempProfile;
+      this.session = makeSession(tempProfile, email);
       this.notifyListeners();
-      return fallbackProfile;
+      return tempProfile;
     } catch (err) {
-      console.error('[AuthService] Error fetching profile:', err);
+      console.error('[AuthService] Error in syncProfileFromSupabase:', err);
     }
     return null;
   }
@@ -1070,11 +1247,14 @@ class AuthService {
     this.currentProfile = null;
     this.patientProfile = null;
     this.caregiverProfile = null;
+    this.needsRoleSelection = false;
+    this.pendingGoogleUser = null;
+    sessionStorage.removeItem('ms_pending_oauth_role');
     localStorage.removeItem(SK_SESSION);
     localStorage.removeItem(SK_PATIENT_PROFILE);
     localStorage.removeItem(SK_CAREGIVER_PROFILE);
     // Note: Do NOT remove ms_local_credentials or ms_all_profiles,
-    // so users can log back in with the same email & password.
+    // and NEVER delete any records from database!
     this.notifyListeners();
   }
 

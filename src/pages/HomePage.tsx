@@ -62,6 +62,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
   const [loadingCaregiver, setLoadingCaregiver] = useState<boolean>(true);
   const [unlinkLoading, setUnlinkLoading] = useState<boolean>(false);
   const [showCaregiverModal, setShowCaregiverModal] = useState<boolean>(false);
+  const [copiedCode, setCopiedCode] = useState<boolean>(false);
 
   // Sync family members & assigned caregiver from database on mount
   useEffect(() => {
@@ -305,6 +306,26 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
                   <span className="w-2 h-2 rounded-full bg-amber-400 shrink-0" />
                   <span>Caregiver: Not Linked</span>
                 </button>
+              )}
+
+              {/* Patient Connection Code for Caregiver & Doctor */}
+              {currentUser.connectionCode && (
+                <div className="text-[10px] xs:text-xs text-blue-200 bg-[#081F38]/90 border border-blue-400/40 rounded-full px-2.5 py-0.5 font-bold mt-1 flex items-center gap-1.5 w-fit">
+                  <span className="text-slate-300">Code:</span>
+                  <strong className="text-amber-300 font-mono tracking-wider">{currentUser.connectionCode}</strong>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigator.clipboard.writeText(currentUser.connectionCode || '');
+                      setCopiedCode(true);
+                      setTimeout(() => setCopiedCode(false), 2000);
+                    }}
+                    className="ml-1 text-[9px] bg-blue-600 hover:bg-blue-500 text-white px-1.5 py-0.5 rounded cursor-pointer transition-all font-semibold"
+                  >
+                    {copiedCode ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -933,7 +954,26 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
                   </div>
                   <div className="flex items-start gap-2">
                     <span className="font-bold text-emerald-700">3.</span>
-                    <span>They enter your registered email (<strong>{currentUser.email}</strong>) and password to connect securely.</span>
+                    <span>
+                      They connect by entering your unique Connection Code:
+                      <span className="inline-flex items-center gap-1.5 ml-1 px-2 py-0.5 rounded bg-blue-100 text-blue-900 font-mono font-bold">
+                        {currentUser.connectionCode || 'Available upon sign-in'}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (currentUser.connectionCode) {
+                              navigator.clipboard.writeText(currentUser.connectionCode);
+                              setCopiedCode(true);
+                              setTimeout(() => setCopiedCode(false), 2000);
+                            }
+                          }}
+                          className="text-[10px] bg-blue-600 text-white px-1.5 py-0.2 rounded hover:bg-blue-700 cursor-pointer"
+                        >
+                          {copiedCode ? 'Copied!' : 'Copy'}
+                        </button>
+                      </span>
+                      {' or your registered email ('}<strong>{currentUser.email}</strong>{').'}
+                    </span>
                   </div>
                 </div>
 

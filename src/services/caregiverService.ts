@@ -611,6 +611,7 @@ class CaregiverService {
       );
 
       targetPatient = localProfiles.find((p) => {
+        if (p.connectionCode && p.connectionCode.toLowerCase() === cleanInput) return true;
         if (p.id.toLowerCase() === cleanInput) return true;
         if (p.email && p.email.toLowerCase() === cleanInput) return true;
         if ((p as any).phone && (p as any).phone.toLowerCase() === cleanInput) return true;
@@ -676,6 +677,18 @@ class CaregiverService {
             .maybeSingle();
           if (byEmail && (byEmail.role === 'elderly' || byEmail.role === 'patient') && !byEmail.id.startsWith('elder-')) {
             targetPatient = byEmail;
+          }
+
+          // By Connection Code (e.g. MS-XXXXXX)
+          if (!targetPatient) {
+            const { data: byCode } = await supabase
+              .from('profiles')
+              .select('*')
+              .ilike('connection_code', cleanInput)
+              .maybeSingle();
+            if (byCode && (byCode.role === 'elderly' || byCode.role === 'patient') && !byCode.id.startsWith('elder-')) {
+              targetPatient = byCode;
+            }
           }
 
           // By UUID

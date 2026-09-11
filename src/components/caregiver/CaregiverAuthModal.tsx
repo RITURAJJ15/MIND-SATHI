@@ -15,6 +15,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { authService } from '../../services/authService';
+import { GoogleSignInButton } from '../common/GoogleSignInButton';
 import { validateEmail, validatePassword, validateName } from '../../types/auth';
 
 interface CaregiverAuthModalProps {
@@ -216,6 +217,21 @@ export const CaregiverAuthModal: React.FC<CaregiverAuthModalProps> = ({
               <span>{error}</span>
             </div>
           )}
+
+          {/* Google Authentication for Caregivers */}
+          <div className="mb-5 space-y-3">
+            <GoogleSignInButton
+              intendedRole="caregiver"
+              label={mode === 'login' ? 'Continue with Google as Caregiver' : 'Sign Up with Google as Caregiver'}
+              className="border-emerald-200 hover:bg-emerald-50/50"
+              onError={(err) => setError(err)}
+            />
+            <div className="flex items-center gap-3">
+              <div className="flex-1 h-px bg-gray-200" />
+              <span className="text-[11px] uppercase font-bold text-gray-400 tracking-wider">or caregiver credentials</span>
+              <div className="flex-1 h-px bg-gray-200" />
+            </div>
+          </div>
 
           {mode === 'login' ? (
             /* ── LOGIN FORM ── */

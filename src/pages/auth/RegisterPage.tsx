@@ -2,6 +2,7 @@ import React, { useState, useId } from 'react';
 import { Eye, EyeOff, Mail, Lock, User, Phone, Loader2, AlertCircle, UserPlus, ShieldCheck } from 'lucide-react';
 import { AshokaChakraIcon } from '../../components/layout/AshokaChakraIcon';
 import { authService } from '../../services/authService';
+import { GoogleSignInButton } from '../../components/common/GoogleSignInButton';
 import { validateEmail, validatePassword, validateMobile, validateName } from '../../types/auth';
 import type { AuthScreen, AuthRole, RegisterPayload } from '../../types/auth';
 
@@ -127,6 +128,20 @@ export const RegisterPage: React.FC<RegisterPageProps> = ({ onNavigateAuth, onRe
           <p className="text-sm font-medium text-red-700">{globalError}</p>
         </div>
       )}
+
+      {/* Google Authentication */}
+      <div className="mb-6 space-y-4">
+        <GoogleSignInButton
+          intendedRole={form.role}
+          onError={(err) => setGlobalError(err)}
+          label="Sign Up with Google"
+        />
+        <div className="flex items-center gap-3">
+          <div className="flex-1 h-px bg-gray-200" />
+          <span className="text-xs uppercase font-bold text-gray-400 tracking-wider">or register with email</span>
+          <div className="flex-1 h-px bg-gray-200" />
+        </div>
+      </div>
 
       <form onSubmit={handleSubmit} noValidate className="space-y-5">
         {/* Full Name */}

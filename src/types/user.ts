@@ -70,6 +70,7 @@ export interface UserProfile {
   createdAt: string;
   email?: string;
   phone?: string;
+  connectionCode?: string;
 }
 
 // AuthSession is defined in types/auth.ts — do not redefine here.

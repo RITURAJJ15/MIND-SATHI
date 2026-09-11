@@ -2,6 +2,7 @@ import React, { useState, useId } from 'react';
 import { Eye, EyeOff, Mail, Lock, Loader2, AlertCircle, LogIn, ShieldCheck } from 'lucide-react';
 import { AshokaChakraIcon } from '../../components/layout/AshokaChakraIcon';
 import { authService } from '../../services/authService';
+import { GoogleSignInButton } from '../../components/common/GoogleSignInButton';
 import { validateEmail } from '../../types/auth';
 import type { AuthScreen, AuthRole } from '../../types/auth';
 
@@ -80,13 +81,17 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onNavigateAuth, onLoginSuc
         <p className="text-sm text-gray-500 mt-1">Sign in to your MIND SATHI account</p>
       </div>
 
-      <div className="mb-6 rounded-xl bg-sathi-50 border border-sathi-200 px-4 py-3">
-        <p className="text-xs font-semibold text-sathi-700 mb-1">Demo Credentials</p>
-        <p className="text-xs text-sathi-600">
-          <span className="font-mono">dadi@mindsathi.in</span> / <span className="font-mono">Sathi123</span>
-          {' (Elderly) | '}
-          <span className="font-mono">admin@mindsathi.in</span> / <span className="font-mono">Admin@1234</span>
-        </p>
+      {/* Google Authentication */}
+      <div className="mb-6 space-y-4">
+        <GoogleSignInButton
+          onError={(err) => setGlobalError(err)}
+          label="Continue with Google"
+        />
+        <div className="flex items-center gap-3">
+          <div className="flex-1 h-px bg-gray-200" />
+          <span className="text-xs uppercase font-bold text-gray-400 tracking-wider">or email</span>
+          <div className="flex-1 h-px bg-gray-200" />
+        </div>
       </div>
 
       {globalError && (

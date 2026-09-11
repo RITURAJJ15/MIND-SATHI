@@ -25,6 +25,9 @@ import {
   Sparkles,
   AlertTriangle,
   Info,
+  UserPlus,
+  Link,
+  Loader2,
 } from 'lucide-react';
 
 export const ClinicianPortalPage: React.FC = () => {
@@ -36,6 +39,13 @@ export const ClinicianPortalPage: React.FC = () => {
   const [notesSaved, setNotesSaved] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [sessionSyncCount, setSessionSyncCount] = useState<number>(0);
+
+  // Patient Connection State
+  const [showConnectBox, setShowConnectBox] = useState<boolean>(false);
+  const [connectInput, setConnectInput] = useState<string>('');
+  const [connectLoading, setConnectLoading] = useState<boolean>(false);
+  const [connectError, setConnectError] = useState<string>('');
+  const [connectSuccess, setConnectSuccess] = useState<string>('');
 
   // 1. Fetch genuine authorized patients
   useEffect(() => {
@@ -98,6 +108,27 @@ export const ClinicianPortalPage: React.FC = () => {
     }
   }, [patientId]);
 
+  const handleConnectPatient = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!connectInput.trim()) return;
+    setConnectLoading(true);
+    setConnectError('');
+    setConnectSuccess('');
+
+    const res = await clinicalService.connectPatientToDoctor(currentUser?.id || 'doctor', connectInput.trim());
+    setConnectLoading(false);
+    if (!res.success || !res.patient) {
+      setConnectError(res.error || 'Failed to connect patient.');
+    } else {
+      setConnectSuccess(`Successfully connected to ${res.patient.name}!`);
+      setConnectInput('');
+      const updated = await clinicalService.getAuthorizedPatients(currentUser?.id);
+      setAuthorizedPatients(updated);
+      setSelectedPatientId(res.patient.id);
+      setTimeout(() => setShowConnectBox(false), 2000);
+    }
+  };
+
   const handleSaveNotes = async () => {
     if (!patientId) return;
     await clinicalService.saveDoctorNotes(patientId, currentUser?.id || 'doctor', doctorNotes);
@@ -151,7 +182,7 @@ export const ClinicianPortalPage: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-3 self-start sm:self-center flex-wrap">
-          {authorizedPatients.length > 1 && (
+          {authorizedPatients.length > 0 && (
             <div className="bg-white/10 backdrop-blur-md px-3.5 py-2 rounded-2xl border border-white/20 flex items-center gap-2.5">
               <User className="w-4 h-4 text-blue-300" />
               <span className="text-xs text-blue-200 font-bold uppercase tracking-wide">Patient:</span>
@@ -170,6 +201,15 @@ export const ClinicianPortalPage: React.FC = () => {
           )}
 
           <button
+            onClick={() => setShowConnectBox((v) => !v)}
+            type="button"
+            className="bg-white/15 hover:bg-white/25 text-white text-xs sm:text-sm font-bold px-3.5 py-2.5 rounded-2xl border border-white/20 flex items-center gap-2 cursor-pointer transition-all active:scale-95"
+          >
+            <UserPlus className="w-4 h-4 text-blue-300" />
+            <span>{showConnectBox ? 'Close' : 'Connect Patient'}</span>
+          </button>
+
+          <button
             onClick={handleExportReport}
             type="button"
             className="bg-blue-600 hover:bg-blue-500 text-white text-xs sm:text-sm font-black px-4 py-2.5 rounded-2xl shadow-tactile flex items-center gap-2 cursor-pointer transition-all active:scale-95"
@@ -180,6 +220,71 @@ export const ClinicianPortalPage: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Connect Patient Drawer / Card */}
+      {showConnectBox && (
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-3xl p-5 sm:p-6 shadow-sm animate-fade-in">
+          <div className="flex items-center gap-2 mb-2">
+            <Link className="w-5 h-5 text-blue-600" />
+            <h3 className="text-base font-bold text-gray-900">Connect Patient to Clinical Dashboard</h3>
+          </div>
+          <p className="text-xs text-gray-600 mb-4 max-w-xl">
+            Enter the patient's unique <strong>Connection Code (e.g. MS-XXXXXX)</strong> or registered email address.
+          </p>
+
+          {connectError && (
+            <div className="mb-3 p-3 bg-red-50 border border-red-200 text-red-700 text-xs font-semibold rounded-xl flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{connectError}</span>
+            </div>
+          )}
+          {connectSuccess && (
+            <div className="mb-3 p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold rounded-xl flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+              <span>{connectSuccess}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleConnectPatient} className="flex flex-col sm:flex-row gap-3">
+            <input
+              type="text"
+              value={connectInput}
+              onChange={(e) => setConnectInput(e.target.value)}
+              placeholder="e.g. MS-829104 or patient@gmail.com"
+              className="flex-1 bg-white border border-gray-300 rounded-xl px-4 py-2.5 text-sm font-semibold text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              type="submit"
+              disabled={connectLoading || !connectInput.trim()}
+              className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm px-6 py-2.5 rounded-xl shadow-sm transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {connectLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Link className="w-4 h-4" />}
+              <span>Link Patient</span>
+            </button>
+          </form>
+        </div>
+      )}
+
+      {/* Empty State when no patient connected */}
+      {!selectedPatient && (
+        <div className="bg-white p-8 sm:p-12 rounded-3xl shadow-elder border border-blue-100 text-center space-y-4">
+          <div className="w-16 h-16 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto shadow-sm">
+            <UserPlus className="w-8 h-8" />
+          </div>
+          <h2 className="text-xl font-black text-gray-900">No Patients Connected Yet</h2>
+          <p className="text-sm text-gray-600 max-w-md mx-auto">
+            Connect to an elderly patient by entering their unique MIND SATHI Connection Code (e.g. <strong className="text-blue-700">MS-XXXXXX</strong>) or registered email address.
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowConnectBox(true)}
+            className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm rounded-xl shadow-tactile transition-all cursor-pointer inline-flex items-center gap-2"
+          >
+            <Link className="w-4 h-4" />
+            <span>Connect Patient Now</span>
+          </button>
+        </div>
+      )}
 
       {/* Patient Profile & Demographic Info Card */}
       {selectedPatient && (

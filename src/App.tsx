@@ -38,7 +38,14 @@ const roleToTab: Record<AuthRole, string> = {
 
 export const App: React.FC = () => {
   const [activeTab, setActiveTab]     = useState<string>('home');
-  const { isAuthenticated, isLoading, currentUser, isElderly } = useCurrentUser(activeTab);
+  const {
+    isAuthenticated,
+    isLoading,
+    currentUser,
+    isElderly,
+    needsRoleSelection,
+    completeGoogleProfile,
+  } = useCurrentUser(activeTab);
   const [showLanding, setShowLanding] = useState<boolean>(true);
   const [authScreen, setAuthScreen]   = useState<AuthScreen>('login');
   const [pendingRole, setPendingRole] = useState<AuthRole | null>(null);
@@ -149,6 +156,25 @@ export const App: React.FC = () => {
             onSelectRole={handleSelectRole}
           />
         )}
+      </AuthLayout>
+    );
+  }
+
+  // ── First-time Google Auth: Role Selection required ───────────────────────
+  if (isAuthenticated && needsRoleSelection) {
+    return (
+      <AuthLayout>
+        <SelectRolePage
+          onNavigateAuth={handleNavigateAuth}
+          onSelectRole={async (role) => {
+            const profile = await completeGoogleProfile(role);
+            if (profile) {
+              const tab = roleToTab[profile.role] ?? 'home';
+              setActiveTab(tab);
+              window.scrollTo({ top: 0, behavior: 'instant' });
+            }
+          }}
+        />
       </AuthLayout>
     );
   }

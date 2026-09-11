@@ -36,61 +36,263 @@ const SK_DOCTOR_NOTES_PREFIX = 'mind_sathi_doctor_notes_';
 
 class ClinicalService {
   /**
+   * Connects an elderly patient to a healthcare provider via Connection Code, Email, or UUID.
+   */
+  public async connectPatientToDoctor(
+    doctorId: string,
+    patientIdentifier: string
+  ): Promise<{ success: boolean; error?: string; patient?: UserProfile }> {
+    if (!doctorId || !patientIdentifier.trim()) {
+      return { success: false, error: 'Doctor ID and Patient Identifier are required.' };
+    }
+
+    const cleanInput = patientIdentifier.trim().toLowerCase();
+    try {
+      let targetPatient: UserProfile | null = null;
+
+      // 1. Check local profiles
+      const localProfiles = authService.getAllProfiles().filter((p) =>
+        (p.role === 'elderly' || (p.role as string) === 'patient') &&
+        !p.id.startsWith('elder-') &&
+        p.id !== 'guest'
+      );
+
+      targetPatient = localProfiles.find((p) => {
+        if (p.connectionCode && p.connectionCode.toLowerCase() === cleanInput) return true;
+        if (p.id.toLowerCase() === cleanInput) return true;
+        if (p.email && p.email.toLowerCase() === cleanInput) return true;
+        return false;
+      }) || null;
+
+      // 2. Query Supabase profiles
+      if (!targetPatient) {
+        // By Connection Code
+        const { data: byCode } = await supabase
+          .from('profiles')
+          .select('*')
+          .ilike('connection_code', cleanInput)
+          .maybeSingle();
+
+        if (byCode && (byCode.role === 'elderly' || byCode.role === 'patient') && !byCode.id.startsWith('elder-')) {
+          targetPatient = {
+            id: byCode.id,
+            name: byCode.full_name || 'Patient',
+            preferredName: byCode.preferred_name || byCode.full_name?.split(' ')[0] || 'Patient',
+            role: 'elderly',
+            age: byCode.age || 70,
+            gender: byCode.gender || 'other',
+            avatarUrl: byCode.profile_photo_url || `https://api.dicebear.com/9.x/avataaars/svg?seed=${byCode.id}&backgroundColor=b6e3f4`,
+            primaryLanguage: byCode.preferred_language || 'en',
+            city: byCode.city || 'Guwahati',
+            state: byCode.state || 'Assam',
+            isAyushmanMember: Boolean(byCode.is_ayushman_member),
+            ayushmanMemberId: byCode.ayushman_member_id,
+            ayushmanStatus: byCode.ayushman_status || 'none',
+            abhaId: byCode.abha_id,
+            abhaStatus: byCode.abha_status || 'none',
+            hasCompletedOnboarding: true,
+            caregiverIds: byCode.caregiver_ids || [],
+            clinicianIds: [doctorId],
+            accessibility: byCode.accessibility || { fontSize: 'normal', highContrast: false, textToSpeechAuto: false, soundEffects: true, speechRate: 0.85 },
+            streakDays: byCode.streak_days || 1,
+            totalXp: byCode.total_xp || 50,
+            level: byCode.level || 1,
+            levelTitle: byCode.level_title || 'Naya Sathi',
+            createdAt: byCode.created_at || new Date().toISOString(),
+            email: byCode.email || '',
+            phone: byCode.phone || '',
+            connectionCode: byCode.connection_code,
+          };
+        }
+
+        // By Email
+        if (!targetPatient) {
+          const { data: byEmail } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('email', cleanInput)
+            .maybeSingle();
+
+          if (byEmail && (byEmail.role === 'elderly' || byEmail.role === 'patient') && !byEmail.id.startsWith('elder-')) {
+            targetPatient = {
+              id: byEmail.id,
+              name: byEmail.full_name || 'Patient',
+              preferredName: byEmail.preferred_name || byEmail.full_name?.split(' ')[0] || 'Patient',
+              role: 'elderly',
+              age: byEmail.age || 70,
+              gender: byEmail.gender || 'other',
+              avatarUrl: byEmail.profile_photo_url || `https://api.dicebear.com/9.x/avataaars/svg?seed=${byEmail.id}&backgroundColor=b6e3f4`,
+              primaryLanguage: byEmail.preferred_language || 'en',
+              city: byEmail.city || 'Guwahati',
+              state: byEmail.state || 'Assam',
+              isAyushmanMember: Boolean(byEmail.is_ayushman_member),
+              ayushmanMemberId: byEmail.ayushman_member_id,
+              ayushmanStatus: byEmail.ayushman_status || 'none',
+              abhaId: byEmail.abha_id,
+              abhaStatus: byEmail.abha_status || 'none',
+              hasCompletedOnboarding: true,
+              caregiverIds: byEmail.caregiver_ids || [],
+              clinicianIds: [doctorId],
+              accessibility: byEmail.accessibility || { fontSize: 'normal', highContrast: false, textToSpeechAuto: false, soundEffects: true, speechRate: 0.85 },
+              streakDays: byEmail.streak_days || 1,
+              totalXp: byEmail.total_xp || 50,
+              level: byEmail.level || 1,
+              levelTitle: byEmail.level_title || 'Naya Sathi',
+              createdAt: byEmail.created_at || new Date().toISOString(),
+              email: byEmail.email || '',
+              phone: byEmail.phone || '',
+              connectionCode: byEmail.connection_code,
+            };
+          }
+        }
+      }
+
+      if (!targetPatient) {
+        return { success: false, error: 'No registered elderly patient found with that Connection Code or Email.' };
+      }
+
+      // 3. Upsert relationship in Supabase doctor_patient table
+      try {
+        await supabase.from('doctor_patient').upsert({
+          doctor_id: doctorId,
+          patient_id: targetPatient.id,
+        });
+      } catch (err) {
+        console.warn('[ClinicalService] doctor_patient upsert note:', err);
+      }
+
+      // 4. Save to local cache
+      const cacheKey = `mind_sathi_doctor_patients_${doctorId}`;
+      const cached = JSON.parse(localStorage.getItem(cacheKey) || '[]');
+      const filtered = cached.filter((p: any) => p.id !== targetPatient!.id);
+      filtered.unshift(targetPatient);
+      localStorage.setItem(cacheKey, JSON.stringify(filtered));
+
+      return { success: true, patient: targetPatient };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Failed to connect patient.' };
+    }
+  }
+
+  /**
+   * Unlinks a patient from the clinician portal.
+   */
+  public async unlinkPatientFromDoctor(doctorId: string, patientId: string): Promise<boolean> {
+    try {
+      await supabase.from('doctor_patient').delete().match({ doctor_id: doctorId, patient_id: patientId });
+      const cacheKey = `mind_sathi_doctor_patients_${doctorId}`;
+      const cached = JSON.parse(localStorage.getItem(cacheKey) || '[]');
+      const filtered = cached.filter((p: any) => p.id !== patientId);
+      localStorage.setItem(cacheKey, JSON.stringify(filtered));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Retrieves genuine authorized elderly patients for the healthcare professional portal.
-   * Discovers real registered patients from authService, offlineDb, and Supabase.
+   * Prioritizes patients linked in the doctor_patient table.
    */
   public async getAuthorizedPatients(doctorId?: string): Promise<UserProfile[]> {
     const patientsMap = new Map<string, UserProfile>();
 
-    // 1. Linked patient in authService
-    const linked = authService.getPatientProfile();
-    if (linked && isRealProfile(linked)) {
-      patientsMap.set(linked.id, linked);
+    // 1. If doctorId is provided, check doctor_patient table in Supabase
+    if (doctorId && doctorId !== 'guest') {
+      try {
+        const { data: linkRows } = await supabase
+          .from('doctor_patient')
+          .select('patient_id')
+          .eq('doctor_id', doctorId);
+
+        if (linkRows && linkRows.length > 0) {
+          for (const row of linkRows) {
+            if (row.patient_id) {
+              const { data: ptRow } = await supabase
+                .from('profiles')
+                .select('*')
+                .eq('id', row.patient_id)
+                .maybeSingle();
+
+              if (ptRow && !ptRow.id.startsWith('elder-')) {
+                const mapped: UserProfile = {
+                  id: ptRow.id,
+                  name: ptRow.full_name || 'Patient',
+                  preferredName: ptRow.preferred_name || ptRow.full_name?.split(' ')[0] || 'Patient',
+                  role: 'elderly',
+                  age: ptRow.age || 70,
+                  gender: ptRow.gender || 'other',
+                  avatarUrl: ptRow.profile_photo_url || `https://api.dicebear.com/9.x/avataaars/svg?seed=${ptRow.id}&backgroundColor=b6e3f4`,
+                  primaryLanguage: ptRow.preferred_language || 'en',
+                  city: ptRow.city || 'Guwahati',
+                  state: ptRow.state || 'Assam',
+                  northeastRegion: ptRow.northeast_region || 'Assam',
+                  isAyushmanMember: Boolean(ptRow.is_ayushman_member),
+                  ayushmanMemberId: ptRow.ayushman_member_id,
+                  ayushmanStatus: ptRow.ayushman_status || 'none',
+                  abhaId: ptRow.abha_id,
+                  abhaStatus: ptRow.abha_status || 'none',
+                  hasCompletedOnboarding: true,
+                  caregiverIds: ptRow.caregiver_ids || [],
+                  clinicianIds: [doctorId],
+                  accessibility: ptRow.accessibility || { fontSize: 'normal', highContrast: false, textToSpeechAuto: false, soundEffects: true, speechRate: 0.85 },
+                  streakDays: ptRow.streak_days || 1,
+                  totalXp: ptRow.total_xp || 50,
+                  level: ptRow.level || 1,
+                  levelTitle: ptRow.level_title || 'Naya Sathi',
+                  createdAt: ptRow.created_at || new Date().toISOString(),
+                  email: ptRow.email || '',
+                  phone: ptRow.phone || '',
+                  connectionCode: ptRow.connection_code,
+                };
+                patientsMap.set(mapped.id, mapped);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[ClinicalService] doctor_patient query note:', err);
+      }
+
+      // Check local cache for this doctor
+      try {
+        const cacheKey = `mind_sathi_doctor_patients_${doctorId}`;
+        const cached = JSON.parse(localStorage.getItem(cacheKey) || '[]');
+        if (Array.isArray(cached)) {
+          cached.forEach((p: any) => {
+            if (p.id && !patientsMap.has(p.id) && isRealProfile(p)) {
+              patientsMap.set(p.id, p);
+            }
+          });
+        }
+      } catch {}
+
+      // If doctor already has connected patients, return strictly those connected patients!
+      if (patientsMap.size > 0) {
+        return Array.from(patientsMap.values());
+      }
     }
 
-    // 2. Active patient profile if current user is elderly
-    const current = authService.getCurrentUser();
-    if (current && (current.role === 'elderly' || (current.role as string) === 'patient') && isRealProfile(current)) {
-      patientsMap.set(current.id, current);
-    }
-
-    // 3. Local profiles cache
+    // 2. Fallback: discover any real registered elderly patients
     const allLocal = authService.getAllProfiles();
     allLocal.forEach((p) => {
       if ((p.role === 'elderly' || (p.role as string) === 'patient') && isRealProfile(p)) {
-        if (!patientsMap.has(p.id)) {
+        if (!patientsMap.has(p.id) && p.email?.toLowerCase() !== 'dadi@mindsathi.in') {
           patientsMap.set(p.id, p);
         }
       }
     });
 
-    // 4. Dexie offlineDb profiles
-    try {
-      if (typeof window !== 'undefined') {
-        const offlineProfiles = await offlineDb.profiles.toArray();
-        offlineProfiles.forEach((p) => {
-          if ((p.role === 'elderly' || (p.role as string) === 'patient') && isRealProfile(p)) {
-            if (!patientsMap.has(p.id)) {
-              patientsMap.set(p.id, p);
-            }
-          }
-        });
-      }
-    } catch (e) {
-      console.warn('[ClinicalService] Dexie profiles fetch note:', e);
-    }
-
-    // 5. Supabase profiles if online
     try {
       const { data: dbProfiles } = await supabase
         .from('profiles')
         .select('*')
         .eq('role', 'elderly')
-        .limit(50);
+        .limit(20);
 
       if (dbProfiles && dbProfiles.length > 0) {
         dbProfiles.forEach((row: any) => {
-          if (row.id && !patientsMap.has(row.id)) {
+          if (row.id && !patientsMap.has(row.id) && !row.id.startsWith('elder-') && row.email?.toLowerCase() !== 'dadi@mindsathi.in') {
             const mapped: UserProfile = {
               id: row.id,
               name: row.full_name || 'Registered Patient',
@@ -119,36 +321,15 @@ class ClinicalService {
               createdAt: row.created_at || new Date().toISOString(),
               email: row.email || '',
               phone: row.phone || '',
+              connectionCode: row.connection_code,
             };
-            if (isRealProfile(mapped)) {
-              patientsMap.set(mapped.id, mapped);
-            }
+            patientsMap.set(mapped.id, mapped);
           }
         });
       }
-    } catch (err) {
-      console.warn('[ClinicalService] Supabase profiles query warning:', err);
-    }
+    } catch {}
 
-    // 6. If real registered patients exist, exclude demo profile Dadi Sathi
     const result = Array.from(patientsMap.values());
-    const realPatients = result.filter(
-      (p) =>
-        p.email?.toLowerCase() !== 'dadi@mindsathi.in' &&
-        p.id !== 'e1000000-0000-4000-a000-000000000001'
-    );
-    if (realPatients.length > 0) {
-      return realPatients;
-    }
-
-    // If no real patients registered yet, fallback to default demo patient
-    if (result.length === 0) {
-      const demoElder = DEFAULT_PROFILES.find((p) => p.role === 'elderly');
-      if (demoElder) {
-        return [demoElder];
-      }
-    }
-
     return result;
   }
 

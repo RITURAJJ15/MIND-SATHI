@@ -56,6 +56,10 @@ export function useCurrentUser(contextTab?: string) {
     createdAt: new Date().toISOString(),
   };
 
+  const needsRoleSelection = authService.getNeedsRoleSelection();
+  const completeGoogleProfile = (role: any, details?: any) => authService.completeGoogleProfile(role, details);
+  const signInWithGoogle = (intendedRole?: any) => authService.signInWithGoogle(intendedRole);
+
   return {
     currentUser: safeUser,
     session,
@@ -63,6 +67,9 @@ export function useCurrentUser(contextTab?: string) {
     switchProfile,
     isLoading,
     isAuthenticated: !isLoading && authService.isAuthenticated(),
+    needsRoleSelection,
+    completeGoogleProfile,
+    signInWithGoogle,
     isElderly:   safeUser.role === 'elderly',
     isCaregiver: safeUser.role === 'caregiver',
     isClinician: safeUser.role === 'clinician',
