@@ -25,15 +25,25 @@ export const VOICE_LANGUAGES: VoiceLanguageOption[] = [
 ];
 
 export interface STTRequestPayload {
-  audioContent: string; // Base64 audio string
+  audioContent: string; // Base64 WAV PCM audio string
   language: VoiceLanguage;
-  audioFormat?: string; // webm, wav, mp4, etc.
+  audioFormat?: string; // wav
+  samplingRate?: number; // 16000
 }
 
 export interface STTResponse {
   success: boolean;
   text?: string;
-  error?: string;
+  isEmpty?: boolean;
+  error?: VoiceErrorCode | string;
+  safeMessage?: string;
+  language?: VoiceLanguage;
+  diagnostics?: {
+    samplingRate?: number;
+    audioFormat?: string;
+    bhashiniStatus?: number;
+    sizeBytes?: number;
+  };
 }
 
 export interface TTSRequestPayload {
@@ -46,18 +56,31 @@ export interface TTSResponse {
   success: boolean;
   audioContent?: string; // Base64 audio string
   audioFormat?: string;
-  error?: string;
+  error?: VoiceErrorCode | string;
+  safeMessage?: string;
 }
 
-export interface VoiceError {
-  code:
-    | 'MIC_PERMISSION_DENIED'
-    | 'MIC_UNAVAILABLE'
-    | 'NO_SPEECH_DETECTED'
-    | 'STT_FAILED'
-    | 'GEMINI_FAILED'
-    | 'TTS_FAILED'
-    | 'SERVICE_UNAVAILABLE'
-    | 'UNKNOWN_ERROR';
-  message: string;
-}
+export type VoiceErrorCode =
+  | 'MIC_PERMISSION_DENIED'
+  | 'EMPTY_RECORDING'
+  | 'BHASHINI_AUTH_ERROR'
+  | 'BHASHINI_CONFIG_ERROR'
+  | 'BHASHINI_ASR_ERROR'
+  | 'GEMINI_ERROR'
+  | 'BHASHINI_TTS_ERROR'
+  | 'NETWORK_ERROR'
+  | 'TIMEOUT'
+  | 'NO_SPEECH_DETECTED';
+
+export const VOICE_ERROR_MESSAGES: Record<VoiceErrorCode, string> = {
+  MIC_PERMISSION_DENIED: 'Microphone permission was denied. Please allow microphone access and try again.',
+  EMPTY_RECORDING: 'No voice was detected. Please speak clearly and try again.',
+  BHASHINI_AUTH_ERROR: 'Voice service authentication failed. Please check the BHASHINI configuration.',
+  BHASHINI_CONFIG_ERROR: 'The selected language voice service is not configured.',
+  BHASHINI_ASR_ERROR: 'Voice recognition is temporarily unavailable.',
+  GEMINI_ERROR: 'MIND SATHI could not prepare a response. Please try again.',
+  BHASHINI_TTS_ERROR: 'MIND SATHI prepared the answer but could not play the voice response.',
+  NETWORK_ERROR: 'Please check your internet connection and try again.',
+  TIMEOUT: 'The voice service took too long to respond. Please try again.',
+  NO_SPEECH_DETECTED: 'No speech was detected. Please tap the microphone and speak again.',
+};

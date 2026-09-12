@@ -729,11 +729,24 @@ async function handleBhashiniApiRoute(req: http.IncomingMessage, res: http.Serve
   const { callBhashiniASR, callBhashiniTTS, getBhashiniCredentials } = await import('./bhashiniServerHelper');
   const { inferenceKey, udyatKey } = getBhashiniCredentials();
 
+  const ERROR_MESSAGES: Record<string, string> = {
+    MIC_PERMISSION_DENIED: 'Microphone permission was denied. Please allow microphone access and try again.',
+    EMPTY_RECORDING: 'No voice was detected. Please speak clearly and try again.',
+    BHASHINI_AUTH_ERROR: 'Voice service authentication failed. Please check the BHASHINI configuration.',
+    BHASHINI_CONFIG_ERROR: 'The selected language voice service is not configured.',
+    BHASHINI_ASR_ERROR: 'Voice recognition is temporarily unavailable.',
+    GEMINI_ERROR: 'MIND SATHI could not prepare a response. Please try again.',
+    BHASHINI_TTS_ERROR: 'MIND SATHI prepared the answer but could not play the voice response.',
+    NETWORK_ERROR: 'Please check your internet connection and try again.',
+    TIMEOUT: 'The voice service took too long to respond. Please try again.',
+    NO_SPEECH_DETECTED: 'No speech was detected. Please tap the microphone and speak again.',
+  };
+
   if (!inferenceKey && !udyatKey) {
     sendJson(res, 503, {
       success: false,
-      error: 'VOICE_SERVICE_NOT_CONFIGURED',
-      message: 'Bhashini API keys (BHASHINI_INFERENCE_API_KEY or BHASHINI_UDYAT_KEY) are not configured on the server.',
+      error: 'BHASHINI_AUTH_ERROR',
+      safeMessage: ERROR_MESSAGES.BHASHINI_AUTH_ERROR,
     });
     return true;
   }
@@ -749,9 +762,13 @@ async function handleBhashiniApiRoute(req: http.IncomingMessage, res: http.Serve
   // 1. Speech-to-Text (ASR)
   if (url === '/api/bhashini/speech-to-text') {
     try {
-      const { audioContent, language = 'hi', audioFormat = 'wav' } = body;
+      const { audioContent, language = 'as', audioFormat = 'wav', samplingRate = 16000 } = body;
       if (!audioContent || typeof audioContent !== 'string') {
-        sendJson(res, 400, { success: false, error: 'INVALID_AUDIO_DATA' });
+        sendJson(res, 400, {
+          success: false,
+          error: 'EMPTY_RECORDING',
+          safeMessage: ERROR_MESSAGES.EMPTY_RECORDING,
+        });
         return true;
       }
 
@@ -759,24 +776,52 @@ async function handleBhashiniApiRoute(req: http.IncomingMessage, res: http.Serve
         ? audioContent.split('base64,')[1]
         : audioContent;
 
-      const text = await callBhashiniASR({
+      if (cleanBase64.length < 500) {
+        sendJson(res, 200, {
+          success: true,
+          text: '',
+          isEmpty: true,
+          safeMessage: ERROR_MESSAGES.NO_SPEECH_DETECTED,
+        });
+        return true;
+      }
+
+      const result = await callBhashiniASR({
         audioBase64: cleanBase64,
         language,
         audioFormat,
+        samplingRate,
       });
 
-      sendJson(res, 200, { success: true, text, language });
+      if (!result.text || !result.text.trim()) {
+        sendJson(res, 200, {
+          success: true,
+          text: '',
+          isEmpty: true,
+          safeMessage: ERROR_MESSAGES.NO_SPEECH_DETECTED,
+          language,
+        });
+        return true;
+      }
+
+      sendJson(res, 200, {
+        success: true,
+        text: result.text.trim(),
+        isEmpty: false,
+        language,
+        diagnostics: {
+          samplingRate,
+          audioFormat,
+          bhashiniStatus: result.bhashiniStatus,
+          sizeBytes: cleanBase64.length,
+        },
+      });
       return true;
     } catch (err: any) {
-      if (err.message === 'VOICE_SERVICE_NOT_CONFIGURED') {
-        sendJson(res, 503, { success: false, error: err.message });
-        return true;
-      }
-      if (err.message === 'NO_SPEECH_RECOGNIZED') {
-        sendJson(res, 200, { success: false, error: 'NO_SPEECH_RECOGNIZED', text: '' });
-        return true;
-      }
-      sendJson(res, 502, { success: false, error: 'BHASHINI_STT_UNAVAILABLE' });
+      const errorCode = err.message || 'BHASHINI_ASR_ERROR';
+      const safeMessage = ERROR_MESSAGES[errorCode] || ERROR_MESSAGES.BHASHINI_ASR_ERROR;
+      const status = errorCode === 'BHASHINI_AUTH_ERROR' ? 503 : errorCode === 'TIMEOUT' ? 504 : 502;
+      sendJson(res, status, { success: false, error: errorCode, safeMessage });
       return true;
     }
   }
@@ -784,26 +829,30 @@ async function handleBhashiniApiRoute(req: http.IncomingMessage, res: http.Serve
   // 2. Text-to-Speech (TTS)
   if (url === '/api/bhashini/text-to-speech') {
     try {
-      const { text, language = 'hi', gender = 'female' } = body;
+      const { text, language = 'as', gender = 'female' } = body;
       if (!text || typeof text !== 'string' || !text.trim()) {
         sendJson(res, 400, { success: false, error: 'INVALID_TEXT_INPUT' });
         return true;
       }
 
-      const { audioContent, audioFormat } = await callBhashiniTTS({
+      const result = await callBhashiniTTS({
         text: text.trim(),
         language,
         gender,
       });
 
-      sendJson(res, 200, { success: true, audioContent, audioFormat, language });
+      sendJson(res, 200, {
+        success: true,
+        audioContent: result.audioContent,
+        audioFormat: result.audioFormat,
+        language,
+      });
       return true;
     } catch (err: any) {
-      if (err.message === 'VOICE_SERVICE_NOT_CONFIGURED') {
-        sendJson(res, 503, { success: false, error: err.message });
-        return true;
-      }
-      sendJson(res, 502, { success: false, error: 'BHASHINI_TTS_UNAVAILABLE' });
+      const errorCode = err.message || 'BHASHINI_TTS_ERROR';
+      const safeMessage = ERROR_MESSAGES[errorCode] || ERROR_MESSAGES.BHASHINI_TTS_ERROR;
+      const status = errorCode === 'BHASHINI_AUTH_ERROR' ? 503 : errorCode === 'TIMEOUT' ? 504 : 502;
+      sendJson(res, status, { success: false, error: errorCode, safeMessage });
       return true;
     }
   }

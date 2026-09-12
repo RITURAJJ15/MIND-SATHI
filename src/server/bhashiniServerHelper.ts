@@ -3,36 +3,41 @@
  * ─────────────────────────────────────────────────────────────────────────────
  * Isolated server-side helper for Bhashini ULCA / Dhruva Speech Services.
  * Reads BHASHINI_INFERENCE_API_KEY and/or BHASHINI_UDYAT_KEY from process.env.
- * NEVER exposes keys to client-side code or logs.
+ * NEVER exposes keys to client-side code, logs, or error responses.
  */
 
 export interface BhashiniPipelineConfig {
   callbackUrl: string;
   inferenceApiKey: string;
-  asrServiceIds: Record<string, string>;
-  ttsServiceIds: Record<string, string>;
+  authHeaderName: string;
+  asrServiceId: string;
+  asrAudioFormat: string;
+  asrSamplingRate: number;
+  ttsServiceId: string;
+  ttsAudioFormat: string;
+  ttsSamplingRate: number;
 }
 
 const DEFAULT_CONFIG_URL = 'https://meity-auth.ulcacontrib.org/ulca/apis/v0/model/getModelsPipeline';
 const DEFAULT_INFERENCE_URL = 'https://dhruva-api.bhashini.gov.in/services/inference/pipeline';
 
-// Fallback known standard service IDs on Bhashini / AI4Bharat platform
-const DEFAULT_ASR_SERVICE_IDS: Record<string, string> = {
+// Official AI4Bharat / Bhashini Standard Service IDs by language
+const FALLBACK_ASR_SERVICES: Record<string, string> = {
   as: 'ai4bharat/conformer-multilingual-indo_aryan-gpu--t4',
   hi: 'ai4bharat/conformer-multilingual-indo_aryan-gpu--t4',
   bn: 'ai4bharat/conformer-multilingual-indo_aryan-gpu--t4',
   en: 'ai4bharat/conformer-en-gpu--t4',
 };
 
-const DEFAULT_TTS_SERVICE_IDS: Record<string, string> = {
+const FALLBACK_TTS_SERVICES: Record<string, string> = {
   as: 'ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4',
   hi: 'ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4',
   bn: 'ai4bharat/indic-tts-coqui-indo_aryan-gpu--t4',
   en: 'ai4bharat/indic-tts-coqui-misc-gpu--t4',
 };
 
-// In-memory cache for resolved pipeline config
-let cachedPipelineConfig: { config: BhashiniPipelineConfig; expiresAt: number } | null = null;
+// In-memory per-language config cache (30 minute TTL)
+const pipelineConfigCache = new Map<string, { config: BhashiniPipelineConfig; expiresAt: number }>();
 
 /**
  * Validates availability of Bhashini API credentials
@@ -52,37 +57,51 @@ export function getBhashiniCredentials(): {
 }
 
 /**
- * Resolves Bhashini pipeline configuration (endpoint, authorization token, service IDs).
- * Caches resolution for 30 minutes to minimize network roundtrips.
+ * Resolves official Bhashini pipeline configuration for the specified language.
+ * Dynamically queries getModelsPipeline using BHASHINI_UDYAT_KEY and caches results.
  */
-export async function getPipelineConfig(): Promise<BhashiniPipelineConfig> {
+export async function getPipelineConfigForLanguage(language: string): Promise<BhashiniPipelineConfig> {
   const { inferenceKey, udyatKey, userId, pipelineId } = getBhashiniCredentials();
 
   if (!inferenceKey && !udyatKey) {
-    throw new Error('VOICE_SERVICE_NOT_CONFIGURED');
+    throw new Error('BHASHINI_AUTH_ERROR');
   }
 
-  // Use cached config if still valid
   const now = Date.now();
-  if (cachedPipelineConfig && cachedPipelineConfig.expiresAt > now) {
-    return cachedPipelineConfig.config;
+  const cached = pipelineConfigCache.get(language);
+  if (cached && cached.expiresAt > now) {
+    return cached.config;
   }
 
-  // 1. If Udyat Key is available, attempt dynamic pipeline discovery
+  // 1. Dynamic pipeline discovery via ULCA API if Udyat key is available
   if (udyatKey) {
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-      const payload: any = {
+      const requestBody: any = {
         pipelineTasks: [
-          { taskType: 'asr' },
-          { taskType: 'tts' },
+          {
+            taskType: 'asr',
+            config: {
+              language: {
+                sourceLanguage: language,
+              },
+            },
+          },
+          {
+            taskType: 'tts',
+            config: {
+              language: {
+                sourceLanguage: language,
+              },
+            },
+          },
         ],
       };
 
       if (pipelineId) {
-        payload.pipelineRequestConfig = { pipelineId };
+        requestBody.pipelineRequestConfig = { pipelineId };
       }
 
       const response = await fetch(DEFAULT_CONFIG_URL, {
@@ -91,8 +110,9 @@ export async function getPipelineConfig(): Promise<BhashiniPipelineConfig> {
           'Content-Type': 'application/json',
           ulcaApiKey: udyatKey,
           ...(userId ? { userID: userId } : {}),
+          ...(inferenceKey ? { Authorization: inferenceKey } : {}),
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
 
@@ -101,80 +121,82 @@ export async function getPipelineConfig(): Promise<BhashiniPipelineConfig> {
       if (response.ok) {
         const data = await response.json();
         const callbackUrl = data.pipelineInferenceAPIEndPoint?.callbackUrl || DEFAULT_INFERENCE_URL;
-        const resolvedInferenceKey = data.pipelineInferenceAPIEndPoint?.inferenceApiKey?.value || inferenceKey || udyatKey;
+        const authHeaderName = data.pipelineInferenceAPIEndPoint?.inferenceApiKey?.name || 'Authorization';
+        const authHeaderValue = data.pipelineInferenceAPIEndPoint?.inferenceApiKey?.value || inferenceKey || udyatKey || '';
 
-        const asrServiceIds: Record<string, string> = { ...DEFAULT_ASR_SERVICE_IDS };
-        const ttsServiceIds: Record<string, string> = { ...DEFAULT_TTS_SERVICE_IDS };
+        let asrServiceId = FALLBACK_ASR_SERVICES[language] || FALLBACK_ASR_SERVICES.hi;
+        let asrAudioFormat = 'wav';
+        let asrSamplingRate = 16000;
+
+        let ttsServiceId = FALLBACK_TTS_SERVICES[language] || FALLBACK_TTS_SERVICES.hi;
+        let ttsAudioFormat = 'wav';
+        let ttsSamplingRate = 22050;
 
         if (Array.isArray(data.pipelineResponseConfig)) {
           for (const task of data.pipelineResponseConfig) {
-            if (task.taskType === 'asr' && Array.isArray(task.config)) {
-              for (const cfg of task.config) {
-                const lang = cfg.language?.sourceLanguage;
-                if (lang && cfg.serviceId) {
-                  asrServiceIds[lang] = cfg.serviceId;
-                }
-              }
-            } else if (task.taskType === 'tts' && Array.isArray(task.config)) {
-              for (const cfg of task.config) {
-                const lang = cfg.language?.sourceLanguage;
-                if (lang && cfg.serviceId) {
-                  ttsServiceIds[lang] = cfg.serviceId;
-                }
-              }
+            if (task.taskType === 'asr' && Array.isArray(task.config) && task.config[0]) {
+              const cfg = task.config[0];
+              if (cfg.serviceId) asrServiceId = cfg.serviceId;
+              if (cfg.audioFormat) asrAudioFormat = cfg.audioFormat;
+              if (cfg.samplingRate) asrSamplingRate = Number(cfg.samplingRate) || 16000;
+            } else if (task.taskType === 'tts' && Array.isArray(task.config) && task.config[0]) {
+              const cfg = task.config[0];
+              if (cfg.serviceId) ttsServiceId = cfg.serviceId;
+              if (cfg.audioFormat) ttsAudioFormat = cfg.audioFormat;
+              if (cfg.samplingRate) ttsSamplingRate = Number(cfg.samplingRate) || 22050;
             }
           }
         }
 
         const config: BhashiniPipelineConfig = {
           callbackUrl,
-          inferenceApiKey: resolvedInferenceKey,
-          asrServiceIds,
-          ttsServiceIds,
+          inferenceApiKey: authHeaderValue,
+          authHeaderName,
+          asrServiceId,
+          asrAudioFormat,
+          asrSamplingRate,
+          ttsServiceId,
+          ttsAudioFormat,
+          ttsSamplingRate,
         };
 
-        cachedPipelineConfig = {
-          config,
-          expiresAt: now + 30 * 60 * 1000, // 30 minutes
-        };
-
+        pipelineConfigCache.set(language, { config, expiresAt: now + 30 * 60 * 1000 });
         return config;
       }
     } catch {
-      // Dynamic config lookup failed, fallback to direct inference key
+      // Fall through to direct inference configuration
     }
   }
 
-  // 2. Default direct inference setup using BHASHINI_INFERENCE_API_KEY
+  // 2. Direct Dhruva inference configuration fallback
   const directKey = inferenceKey || udyatKey || '';
   const fallbackConfig: BhashiniPipelineConfig = {
     callbackUrl: DEFAULT_INFERENCE_URL,
     inferenceApiKey: directKey,
-    asrServiceIds: { ...DEFAULT_ASR_SERVICE_IDS },
-    ttsServiceIds: { ...DEFAULT_TTS_SERVICE_IDS },
+    authHeaderName: 'Authorization',
+    asrServiceId: FALLBACK_ASR_SERVICES[language] || FALLBACK_ASR_SERVICES.hi,
+    asrAudioFormat: 'wav',
+    asrSamplingRate: 16000,
+    ttsServiceId: FALLBACK_TTS_SERVICES[language] || FALLBACK_TTS_SERVICES.hi,
+    ttsAudioFormat: 'wav',
+    ttsSamplingRate: 22050,
   };
 
-  cachedPipelineConfig = {
-    config: fallbackConfig,
-    expiresAt: now + 5 * 60 * 1000,
-  };
-
+  pipelineConfigCache.set(language, { config: fallbackConfig, expiresAt: now + 5 * 60 * 1000 });
   return fallbackConfig;
 }
 
 /**
- * Calls Bhashini ASR (Speech-to-Text) inference
+ * Calls Bhashini ASR (Speech-to-Text) inference with verified audio configuration.
  */
 export async function callBhashiniASR(params: {
   audioBase64: string;
   language: string;
   audioFormat?: string;
   samplingRate?: number;
-}): Promise<string> {
-  const { audioBase64, language, audioFormat = 'wav', samplingRate = 16000 } = params;
-  const config = await getPipelineConfig();
-
-  const serviceId = config.asrServiceIds[language] || DEFAULT_ASR_SERVICE_IDS[language] || DEFAULT_ASR_SERVICE_IDS.hi;
+}): Promise<{ text: string; bhashiniStatus: number }> {
+  const { audioBase64, language } = params;
+  const config = await getPipelineConfigForLanguage(language);
 
   const requestPayload = {
     pipelineTasks: [
@@ -184,9 +206,9 @@ export async function callBhashiniASR(params: {
           language: {
             sourceLanguage: language,
           },
-          serviceId,
-          audioFormat,
-          samplingRate,
+          serviceId: config.asrServiceId,
+          audioFormat: config.asrAudioFormat || 'wav',
+          samplingRate: config.asrSamplingRate || 16000,
         },
       },
     ],
@@ -200,14 +222,14 @@ export async function callBhashiniASR(params: {
   };
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 12000); // 12 seconds max
+  const timeoutId = setTimeout(() => controller.abort(), 12000);
 
   try {
     const response = await fetch(config.callbackUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: config.inferenceApiKey,
+        [config.authHeaderName]: config.inferenceApiKey,
       },
       body: JSON.stringify(requestPayload),
       signal: controller.signal,
@@ -215,40 +237,40 @@ export async function callBhashiniASR(params: {
 
     clearTimeout(timeoutId);
 
+    if (response.status === 401 || response.status === 403) {
+      throw new Error('BHASHINI_AUTH_ERROR');
+    }
+    if (response.status === 404) {
+      throw new Error('BHASHINI_CONFIG_ERROR');
+    }
     if (!response.ok) {
-      throw new Error(`BHASHINI_ASR_ERROR_${response.status}`);
+      throw new Error('BHASHINI_ASR_ERROR');
     }
 
     const data = await response.json();
     const taskOutput = data.pipelineResponse?.[0]?.output?.[0];
-    const recognizedText = taskOutput?.source || taskOutput?.target || '';
+    const recognizedText = (taskOutput?.source || taskOutput?.target || taskOutput?.text || '').trim();
 
-    if (!recognizedText.trim()) {
-      throw new Error('NO_SPEECH_RECOGNIZED');
-    }
-
-    return recognizedText.trim();
+    return { text: recognizedText, bhashiniStatus: response.status };
   } catch (err: any) {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError') {
-      throw new Error('BHASHINI_ASR_TIMEOUT');
+      throw new Error('TIMEOUT');
     }
     throw err;
   }
 }
 
 /**
- * Calls Bhashini TTS (Text-to-Speech) inference
+ * Calls Bhashini TTS (Text-to-Speech) inference with verified voice configuration.
  */
 export async function callBhashiniTTS(params: {
   text: string;
   language: string;
   gender?: 'female' | 'male';
-}): Promise<{ audioContent: string; audioFormat: string }> {
+}): Promise<{ audioContent: string; audioFormat: string; bhashiniStatus: number }> {
   const { text, language, gender = 'female' } = params;
-  const config = await getPipelineConfig();
-
-  const serviceId = config.ttsServiceIds[language] || DEFAULT_TTS_SERVICE_IDS[language] || DEFAULT_TTS_SERVICE_IDS.hi;
+  const config = await getPipelineConfigForLanguage(language);
 
   const requestPayload = {
     pipelineTasks: [
@@ -258,8 +280,9 @@ export async function callBhashiniTTS(params: {
           language: {
             sourceLanguage: language,
           },
-          serviceId,
+          serviceId: config.ttsServiceId,
           gender,
+          samplingRate: config.ttsSamplingRate || 22050,
         },
       },
     ],
@@ -273,14 +296,14 @@ export async function callBhashiniTTS(params: {
   };
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 12000); // 12 seconds max
+  const timeoutId = setTimeout(() => controller.abort(), 12000);
 
   try {
     const response = await fetch(config.callbackUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: config.inferenceApiKey,
+        [config.authHeaderName]: config.inferenceApiKey,
       },
       body: JSON.stringify(requestPayload),
       signal: controller.signal,
@@ -288,24 +311,30 @@ export async function callBhashiniTTS(params: {
 
     clearTimeout(timeoutId);
 
+    if (response.status === 401 || response.status === 403) {
+      throw new Error('BHASHINI_AUTH_ERROR');
+    }
+    if (response.status === 404) {
+      throw new Error('BHASHINI_CONFIG_ERROR');
+    }
     if (!response.ok) {
-      throw new Error(`BHASHINI_TTS_ERROR_${response.status}`);
+      throw new Error('BHASHINI_TTS_ERROR');
     }
 
     const data = await response.json();
     const audioObj = data.pipelineResponse?.[0]?.audio?.[0];
     const audioContent = audioObj?.audioContent || '';
-    const audioFormat = data.pipelineResponse?.[0]?.config?.audioFormat || 'wav';
+    const audioFormat = data.pipelineResponse?.[0]?.config?.audioFormat || config.ttsAudioFormat || 'wav';
 
     if (!audioContent) {
-      throw new Error('NO_AUDIO_GENERATED');
+      throw new Error('BHASHINI_TTS_ERROR');
     }
 
-    return { audioContent, audioFormat };
+    return { audioContent, audioFormat, bhashiniStatus: response.status };
   } catch (err: any) {
     clearTimeout(timeoutId);
     if (err.name === 'AbortError') {
-      throw new Error('BHASHINI_TTS_TIMEOUT');
+      throw new Error('TIMEOUT');
     }
     throw err;
   }

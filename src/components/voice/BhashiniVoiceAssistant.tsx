@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useLanguage } from '../../hooks/useLanguage';
-import { VoiceLanguage, VOICE_LANGUAGES, VoiceState } from '../../types/voice';
+import { VoiceLanguage, VOICE_LANGUAGES, VoiceState, VOICE_ERROR_MESSAGES } from '../../types/voice';
 import { bhashiniVoiceService } from '../../services/bhashiniVoiceService';
 import { geminiService } from '../../services/geminiService';
 import { familyService } from '../../services/familyService';
@@ -31,7 +31,7 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
   const { currentUser } = useCurrentUser('voice-assistant');
   const { currentLang } = useLanguage();
 
-  // Default voice language: match app language or default to Assamese
+  // Selected language: match patient's app language or default to Assamese
   const [selectedLanguage, setSelectedLanguage] = useState<VoiceLanguage>(() => {
     if (currentLang === 'as') return 'as';
     if (currentLang === 'bn') return 'bn';
@@ -47,6 +47,7 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
   const [recordingSeconds, setRecordingSeconds] = useState<number>(0);
 
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const autoStopTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Sync selected voice language if user changes app language
   useEffect(() => {
@@ -59,6 +60,7 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
       bhashiniVoiceService.stopPlayback();
       bhashiniVoiceService.cleanupRecording();
     };
@@ -67,22 +69,22 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
   // Quick suggestion prompts according to selected language
   const suggestions: Record<VoiceLanguage, { text: string; label: string }[]> = {
     as: [
-      { label: '📅 আজিৰ দিনলিপি', text: 'আজি মোৰ দিনলিপিত কি কি কাম আছে?' },
-      { label: '💊 ঔষধৰ সোঁৱৰণী', text: 'মই আজি কিবা ঔষধ খাবলৈ বাকী আছে নেকি?' },
-      { label: '👨‍👩‍👧 মোৰ পৰিয়াল', text: 'মোৰ পৰিয়ালৰ সদস্যসকলৰ বিষয়ে কোৱা।' },
+      { label: '📅 আজিৰ দিনলিপি', text: 'মই আজি কি খেল খেলিব পাৰোঁ?' },
+      { label: '💊 দৰবৰ সোঁৱৰণী', text: 'মোৰ আজি কিবা ঔষধ খাবলৈ বাকী আছে নেকি?' },
+      { label: '👨‍👩‍👧 মোৰ পৰিয়াল', text: 'মোৰ পৰিয়ালৰ সদস্যসকলৰ বিষয়ে কোৱা।' },
     ],
     hi: [
-      { label: '📅 आज का प्लान', text: 'आज की मेरी दिनचर्या में क्या-क्या शामिल है?' },
+      { label: '📅 आज का खेल', text: 'आज मुझे कौन सा खेल खेलना चाहिए?' },
       { label: '💊 दवाई रिमाइंडर', text: 'क्या आज की मेरी कोई दवाई बची है?' },
       { label: '👨‍👩‍👧 मेरा परिवार', text: 'मेरे परिवार के सदस्यों के बारे में बताइए।' },
     ],
     bn: [
-      { label: '📅 আজকের রুটিন', text: 'আজ আমার রুটিনে কী কী কাজ আছে?' },
+      { label: '📅 আজকের খেলা', text: 'আজ আমি কী খেলা খেলতে পারি?' },
       { label: '💊 ওষুধের রিমাইন্ডার', text: 'আমার কি কোনো ওষুধ খাওয়ার বাকি আছে?' },
       { label: '👨‍👩‍👧 আমার পরিবার', text: 'আমার পরিবারের সদস্যদের সম্পর্কে বলো।' },
     ],
     en: [
-      { label: '📅 Today’s Plan', text: 'What is my daily schedule for today?' },
+      { label: '📅 Today’s Activity', text: 'What is my activity for today?' },
       { label: '💊 Medication', text: 'Do I have any pending medicine reminders?' },
       { label: '👨‍👩‍👧 My Family', text: 'Tell me about my family members.' },
     ],
@@ -101,18 +103,18 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
       timerRef.current = setInterval(() => {
         setRecordingSeconds((sec) => sec + 1);
       }, 1000);
+
+      // Safe auto-stop after 15 seconds to prevent accidental infinite recording
+      if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
+      autoStopTimeoutRef.current = setTimeout(() => {
+        handleStopRecording();
+      }, 15000);
     } catch (err: any) {
       console.warn('[BhashiniVoiceAssistant] Start recording error:', err);
       setVoiceState('IDLE');
-      if (err.message === 'MIC_PERMISSION_DENIED') {
-        setErrorMessage(
-          'Microphone permission was not granted. Please allow microphone access in your browser.'
-        );
-      } else {
-        setErrorMessage(
-          'Microphone is unavailable. You can tap any of the quick question buttons below.'
-        );
-      }
+      setErrorMessage(
+        err.message || VOICE_ERROR_MESSAGES.MIC_PERMISSION_DENIED
+      );
     }
   };
 
@@ -122,43 +124,51 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
+    if (autoStopTimeoutRef.current) {
+      clearTimeout(autoStopTimeoutRef.current);
+      autoStopTimeoutRef.current = null;
+    }
 
     setVoiceState('PROCESSING_STT');
 
     try {
       const audioResult = await bhashiniVoiceService.stopRecording();
 
-      // Call speech to text (with automatic browser speech fallback)
-      const transcribedQuery = await bhashiniVoiceService.speechToText(
-        audioResult?.base64 || '',
-        selectedLanguage,
-        audioResult?.format || 'wav'
+      // Call Bhashini Speech-to-Text
+      const sttResult = await bhashiniVoiceService.speechToText(
+        audioResult.base64,
+        selectedLanguage
       );
 
-      if (!transcribedQuery || !transcribedQuery.trim()) {
+      // Empty speech check (Section 17 requirement: ONLY show this when speech was genuinely empty)
+      if (sttResult.isEmpty || !sttResult.text || !sttResult.text.trim()) {
         setVoiceState('IDLE');
-        setErrorMessage('No speech heard. Please tap the microphone and try speaking again.');
+        setErrorMessage(VOICE_ERROR_MESSAGES.NO_SPEECH_DETECTED);
         return;
       }
 
-      setUserTranscript(transcribedQuery);
+      const queryText = sttResult.text.trim();
+      setUserTranscript(queryText);
+      setErrorMessage('');
 
-      // Process with Gemini AI grounded in real patient context
-      await processPatientAIQuery(transcribedQuery);
+      // Connect to Gemini AI with MIND SATHI context
+      await processPatientAIQuery(queryText);
     } catch (err: any) {
-      console.warn('[BhashiniVoiceAssistant] Speech recognition notice:', err);
+      console.warn('[BhashiniVoiceAssistant] STT Error:', err);
       setVoiceState('IDLE');
-      setErrorMessage('Could not clearly detect speech. Please tap the microphone and speak again.');
+      // Show the exact technical-safe error message returned by server or voice service
+      const displayMessage = err.message || VOICE_ERROR_MESSAGES.BHASHINI_ASR_ERROR;
+      setErrorMessage(displayMessage);
     }
   };
 
-  // Shared processor for transcribed voice text or quick suggestions
+  // Shared processor for transcribed voice text or quick suggestion chips
   const processPatientAIQuery = async (queryText: string) => {
     setVoiceState('PROCESSING_AI');
-    setErrorMessage(''); // Clear any previous notices immediately
+    setErrorMessage('');
 
     try {
-      // Gather real patient context from local and db services
+      // Gather verified patient context from local/db services
       const familyMembers = familyService.getFamilyMembersForUser(currentUser.id);
       const reminders = reminderService.getRemindersForUser(currentUser.id);
       const dailyPlan = dailyPlanService.getDailyPlan(currentUser.id);
@@ -185,7 +195,7 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
         // Non-blocking
       }
 
-      // Call Gemini assistant grounded in patient context
+      // Call Gemini assistant grounded in patient's daily plan and language
       const reply = await geminiService.chatWithMemoryAssistant({
         userId: currentUser.id,
         message: queryText,
@@ -200,31 +210,25 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
 
       setAssistantReply(reply);
 
-      // Synthesize speech: Try Bhashini TTS first, seamlessly fallback to browser SpeechSynthesis
+      // Synthesize speech using Bhashini TTS (with browser speechService fallback)
       setVoiceState('GENERATING_AUDIO');
-      let audioBase64: string | null = null;
-      try {
-        audioBase64 = await bhashiniVoiceService.textToSpeech(
-          reply,
-          selectedLanguage,
-          'female'
-        );
-      } catch {
-        // Ignored; fallback will speak via browser speechService
-      }
+      const audioBase64 = await bhashiniVoiceService.textToSpeech(
+        reply,
+        selectedLanguage,
+        'female'
+      );
 
       setLastAudioBase64(audioBase64);
       setVoiceState('PLAYING_AUDIO');
 
-      // Speak aloud (Bhashini audio or browser speechService)
+      // Play synthesized audio aloud
       await bhashiniVoiceService.speakText(reply, selectedLanguage, audioBase64);
       setVoiceState('IDLE');
     } catch (err: any) {
       console.error('[BhashiniVoiceAssistant] AI Query error:', err);
       setVoiceState('IDLE');
-      // If Gemini chat succeeded, we don't display error. Only if general call completely failed:
       if (!assistantReply) {
-        setErrorMessage('MIND SATHI is taking a moment to connect. Please try asking again.');
+        setErrorMessage(VOICE_ERROR_MESSAGES.GEMINI_ERROR);
       }
     }
   };
@@ -243,7 +247,7 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
     }
   };
 
-  // Status message rendering based on state
+  // State flow titles matching Section 15
   const getStatusDisplay = () => {
     switch (voiceState) {
       case 'LISTENING':
@@ -254,8 +258,8 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
         };
       case 'PROCESSING_STT':
         return {
-          title: 'Understanding voice...',
-          sub: 'Processing speech...',
+          title: 'Understanding you...',
+          sub: 'Processing speech with Bhashini...',
           color: 'text-amber-300',
         };
       case 'PROCESSING_AI':
@@ -267,7 +271,7 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
       case 'GENERATING_AUDIO':
         return {
           title: 'Preparing voice...',
-          sub: `Converting to ${VOICE_LANGUAGES.find((l) => l.code === selectedLanguage)?.nativeName} speech`,
+          sub: `Generating ${VOICE_LANGUAGES.find((l) => l.code === selectedLanguage)?.nativeName} speech...`,
           color: 'text-teal-300',
         };
       case 'PLAYING_AUDIO':
@@ -279,7 +283,7 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
       case 'ERROR':
         return {
           title: 'Notice',
-          sub: 'Tap below to speak again',
+          sub: 'Tap below to try again',
           color: 'text-amber-300',
         };
       default:
@@ -344,6 +348,7 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
                 onClick={() => {
                   if (voiceState === 'IDLE' || voiceState === 'ERROR') {
                     setSelectedLanguage(lang.code);
+                    setErrorMessage('');
                   }
                 }}
                 disabled={voiceState !== 'IDLE' && voiceState !== 'ERROR'}
