@@ -173,21 +173,43 @@ class CaregiverService {
     const caregiverProfile = allProfiles.find((p) => p.id === caregiverId);
     const caregiverEmail = caregiverProfile?.email?.toLowerCase();
 
-    // ── 1. Check Central Sync Engine (Cross-device persistence) ───────────
-    try {
-      const syncPatient = await centralSyncService.getAssignedPatient(caregiverId, caregiverEmail);
-      if (syncPatient && !syncPatient.id.startsWith('elder-')) {
-        assignedPatients.push(syncPatient);
-      }
-    } catch (syncErr) {
-      console.warn('[CaregiverService] Central sync getAssignedPatient note:', syncErr);
-    }
-
-    // ── 2. Check Supabase `caregiver_patient` table ──────────────────
-    if (assignedPatients.length === 0) {
+    // ── 1. Check Supabase RPC (Authoritative Database Truth for Caregiver) ───
+    const isCgUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(caregiverId);
+    if (isCgUuid) {
       try {
-        const isCgUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(caregiverId);
-        if (isCgUuid) {
+        const { data: rpcData, error: rpcErr } = await supabase.rpc('get_connected_patient_for_caregiver');
+        if (!rpcErr && rpcData) {
+          const rows = Array.isArray(rpcData) ? rpcData : [rpcData];
+          if (rows.length > 0 && rows[0] && rows[0].patient_id) {
+            const row = rows[0];
+            assignedPatients.push({
+              id: row.patient_id,
+              full_name: row.full_name,
+              name: row.full_name,
+              preferred_name: row.preferred_name,
+              preferredName: row.preferred_name,
+              email: row.email,
+              phone: row.phone,
+              age: row.age,
+              gender: row.gender,
+              city: row.city,
+              state: row.state,
+              profile_photo_url: row.profile_photo_url,
+              avatarUrl: row.profile_photo_url,
+              connectionCode: row.connection_code,
+              streak_days: row.streak_days,
+              total_xp: row.total_xp,
+              caregiverIds: [caregiverId],
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('[CaregiverService] get_connected_patient_for_caregiver RPC notice:', e);
+      }
+
+      // ── 2. Direct Supabase caregiver_patient query fallback ────────────────
+      if (assignedPatients.length === 0) {
+        try {
           const { data: linkRows, error: linkErr } = await supabase
             .from('caregiver_patient')
             .select('patient_id')
@@ -206,14 +228,36 @@ class CaregiverService {
               assignedPatients.push(ptData);
             }
           }
+        } catch (err) {
+          console.warn('[CaregiverService] Supabase caregiver_patient query note:', err);
         }
-      } catch (err) {
-        console.warn('[CaregiverService] Supabase caregiver_patient query note:', err);
+      }
+
+      // If this is a real authenticated Supabase user, and Supabase confirms NO link in database:
+      // Purge any stale phantom cache from localStorage so cross-browser state is always accurate.
+      if (assignedPatients.length === 0) {
+        localStorage.removeItem(`${STORAGE_KEY_CAREGIVER_PATIENT}_${caregiverId}`);
+        if (caregiverEmail) {
+          localStorage.removeItem(`${STORAGE_KEY_CAREGIVER_PATIENT}_${caregiverEmail}`);
+        }
+        return [];
       }
     }
 
-    // ── 3. Check Local Storage Cache ─────────────────────────────────
-    if (assignedPatients.length === 0) {
+    // ── 3. Central Sync Engine fallback (only if not a UUID user) ───────────
+    if (assignedPatients.length === 0 && !isCgUuid) {
+      try {
+        const syncPatient = await centralSyncService.getAssignedPatient(caregiverId, caregiverEmail);
+        if (syncPatient && !syncPatient.id.startsWith('elder-')) {
+          assignedPatients.push(syncPatient);
+        }
+      } catch (syncErr) {
+        console.warn('[CaregiverService] Central sync getAssignedPatient note:', syncErr);
+      }
+    }
+
+    // ── 4. Local Storage Cache (only if not a UUID user) ────────────────────
+    if (assignedPatients.length === 0 && !isCgUuid) {
       try {
         const cachedById = localStorage.getItem(`${STORAGE_KEY_CAREGIVER_PATIENT}_${caregiverId}`);
         if (cachedById) {
@@ -231,13 +275,11 @@ class CaregiverService {
             }
           }
         }
-      } catch {
-        // Ignore JSON error
-      }
+      } catch {}
     }
 
-    // ── 4. Check allProfiles in authService ───────────────────────────
-    if (assignedPatients.length === 0) {
+    // ── 5. Check allProfiles in authService (offline/demo fallback) ─────────
+    if (assignedPatients.length === 0 && !isCgUuid) {
       const linkedElder = allProfiles.find(
         (p) => (p.role === 'elderly' || (p.role as string) === 'patient') &&
                !p.id.startsWith('elder-') &&
@@ -257,7 +299,7 @@ class CaregiverService {
       }
     }
 
-    // ── 5. Check Dexie IndexedDB offline storage ─────────────────────
+    // ── 6. Check Dexie IndexedDB offline storage ─────────────────────
     if (assignedPatients.length === 0) {
       try {
         if (typeof window !== 'undefined') {
@@ -900,29 +942,69 @@ class CaregiverService {
         targetPatient.email || cleanInput
       );
 
-      // 2. Supabase caregiver_patient (using verified columns: caregiver_id, patient_id)
-      try {
-        const isCgUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(effectiveCaregiverId);
-        const isPtUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetPatient.id);
-        if (isCgUuid && isPtUuid) {
-          await supabase.from('caregiver_patient').delete().eq('caregiver_id', effectiveCaregiverId);
-          const { error: insertErr } = await supabase.from('caregiver_patient').insert({
-            caregiver_id: effectiveCaregiverId,
-            patient_id: targetPatient.id,
+      // 2. Supabase caregiver_patient (Authoritative cloud database persistence)
+      const isCgUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(effectiveCaregiverId);
+      const isPtUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetPatient.id);
+      
+      if (isCgUuid && isPtUuid) {
+        let dbSaved = false;
+        let dbErrorMsg = '';
+
+        // A. Primary: RPC connect_patient_to_caregiver (SECURITY DEFINER guarantees RLS bypass)
+        try {
+          const { data: rpcRes, error: rpcErr } = await supabase.rpc('connect_patient_to_caregiver', {
+            p_patient_id: targetPatient.id,
           });
 
-          if (insertErr) {
-            if (insertErr.code === '23505') {
+          if (!rpcErr && rpcRes) {
+            dbSaved = true;
+          } else if (rpcErr) {
+            console.warn('[CaregiverService] connect_patient_to_caregiver RPC note:', rpcErr);
+            if (rpcErr.code === '23505' || rpcErr.message?.includes('already linked')) {
               return {
                 success: false,
                 error: `Patient "${targetPatient.full_name || targetPatient.name}" is already linked to another caregiver. Mind Sathi strictly maintains a 1 Patient ↔ 1 Caregiver relationship.`,
               };
             }
-            console.warn('[CaregiverService] Supabase caregiver_patient insert notice:', insertErr?.message);
+            dbErrorMsg = rpcErr.message;
+          }
+        } catch (e: any) {
+          console.warn('[CaregiverService] connect_patient_to_caregiver RPC exception:', e);
+        }
+
+        // B. Secondary fallback: Direct table insert
+        if (!dbSaved) {
+          try {
+            await supabase.from('caregiver_patient').delete().eq('caregiver_id', effectiveCaregiverId);
+            const { error: insertErr } = await supabase.from('caregiver_patient').insert({
+              caregiver_id: effectiveCaregiverId,
+              patient_id: targetPatient.id,
+            });
+
+            if (!insertErr) {
+              dbSaved = true;
+            } else {
+              if (insertErr.code === '23505') {
+                return {
+                  success: false,
+                  error: `Patient "${targetPatient.full_name || targetPatient.name}" is already linked to another caregiver. Mind Sathi strictly maintains a 1 Patient ↔ 1 Caregiver relationship.`,
+                };
+              }
+              dbErrorMsg = insertErr.message || dbErrorMsg;
+              console.warn('[CaregiverService] Supabase caregiver_patient insert notice:', insertErr.message);
+            }
+          } catch (e: any) {
+            dbErrorMsg = e?.message || dbErrorMsg;
           }
         }
-      } catch (insertErr: any) {
-        console.warn('[CaregiverService] Supabase caregiver_patient insert notice:', insertErr?.message);
+
+        // C. Hard requirement: Do NOT fake a local connection if database rejected it!
+        if (!dbSaved) {
+          return {
+            success: false,
+            error: `Failed to store connection in database (${dbErrorMsg || 'RLS policy error'}). Please ensure the unified database migration has been run in the Supabase SQL Editor so both dashboards can access the connection.`,
+          };
+        }
       }
 
       const formattedPatient = {
@@ -1001,10 +1083,16 @@ class CaregiverService {
       // 1. Central sync unlink
       await centralSyncService.unlinkPatient(caregiverId);
 
-      // 2. Find connected patient if possible
+      // 2. Find connected patient and unlink from Supabase database
       let patientId: string | null = null;
       try {
         if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(caregiverId)) {
+          // A. Try RPC first
+          try {
+            await supabase.rpc('disconnect_patient_from_caregiver');
+          } catch {}
+
+          // B. Direct table delete fallback
           const { data: linkRows } = await supabase
             .from('caregiver_patient')
             .select('patient_id')
@@ -1064,6 +1152,12 @@ class CaregiverService {
       let caregiverId: string | null = null;
       try {
         if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(patientId)) {
+          // A. Try RPC first
+          try {
+            await supabase.rpc('disconnect_patient_from_caregiver');
+          } catch {}
+
+          // B. Direct table delete fallback
           const { data: linkRows } = await supabase
             .from('caregiver_patient')
             .select('caregiver_id')

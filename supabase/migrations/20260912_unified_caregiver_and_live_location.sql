@@ -1,7 +1,7 @@
 -- ==============================================================================
 -- MIND SATHI: Unified Caregiver ↔ Patient Sync & Live Location Sharing
 -- Migration: 20260912_unified_caregiver_and_live_location.sql
--- Run this complete script in your Supabase Dashboard -> SQL Editor
+-- Paste and run this ENTIRE script in your Supabase Dashboard -> SQL Editor
 -- ==============================================================================
 
 -- ==============================================================================
@@ -99,7 +99,96 @@ EXCEPTION
 END;
 $$;
 
--- 1.7 RPC function: get_connected_caregiver_for_patient
+-- 1.7 RPC: connect_patient_to_caregiver (Stores the connection in database)
+CREATE OR REPLACE FUNCTION public.connect_patient_to_caregiver(p_patient_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_caller_id UUID;
+  v_caller_role TEXT;
+  v_patient RECORD;
+  v_existing_cg UUID;
+BEGIN
+  v_caller_id := auth.uid();
+  IF v_caller_id IS NULL THEN
+    RAISE EXCEPTION 'Authentication required: caller must be logged in' USING ERRCODE = '28000';
+  END IF;
+
+  -- Verify caller is a caregiver
+  SELECT role INTO v_caller_role FROM public.profiles WHERE id = v_caller_id;
+  IF v_caller_role IS DISTINCT FROM 'caregiver' THEN
+    RAISE EXCEPTION 'Access denied: caller must have caregiver role' USING ERRCODE = '42501';
+  END IF;
+
+  -- Verify target patient exists
+  SELECT * INTO v_patient FROM public.profiles WHERE id = p_patient_id;
+  IF v_patient.id IS NULL THEN
+    RAISE EXCEPTION 'Patient not found' USING ERRCODE = 'P0002';
+  END IF;
+
+  IF v_patient.id = v_caller_id THEN
+    RAISE EXCEPTION 'Cannot connect to your own account as a patient' USING ERRCODE = '22000';
+  END IF;
+
+  -- Check if patient is already linked to another caregiver (1-to-1 enforcement)
+  SELECT caregiver_id INTO v_existing_cg
+  FROM public.caregiver_patient
+  WHERE patient_id = p_patient_id;
+
+  IF v_existing_cg IS NOT NULL AND v_existing_cg != v_caller_id THEN
+    RAISE EXCEPTION 'Patient is already linked to another caregiver' USING ERRCODE = '23505';
+  END IF;
+
+  -- Clean up any previous link for this caregiver (1 caregiver ↔ 1 patient)
+  DELETE FROM public.caregiver_patient WHERE caregiver_id = v_caller_id;
+
+  -- Insert new connection
+  INSERT INTO public.caregiver_patient (caregiver_id, patient_id)
+  VALUES (v_caller_id, p_patient_id)
+  ON CONFLICT (caregiver_id, patient_id) DO NOTHING;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'caregiver_id', v_caller_id,
+    'patient_id', p_patient_id,
+    'patient_name', COALESCE(v_patient.full_name, v_patient.preferred_name, 'Patient'),
+    'connected_at', now()
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.connect_patient_to_caregiver(UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.connect_patient_to_caregiver(UUID) TO authenticated;
+
+-- 1.8 RPC: disconnect_patient_from_caregiver (Unlinks the connection from database)
+CREATE OR REPLACE FUNCTION public.disconnect_patient_from_caregiver()
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_caller_id UUID;
+BEGIN
+  v_caller_id := auth.uid();
+  IF v_caller_id IS NULL THEN
+    RAISE EXCEPTION 'Authentication required: caller must be logged in' USING ERRCODE = '28000';
+  END IF;
+
+  DELETE FROM public.caregiver_patient
+  WHERE caregiver_id = v_caller_id OR patient_id = v_caller_id;
+
+  RETURN TRUE;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.disconnect_patient_from_caregiver() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.disconnect_patient_from_caregiver() TO authenticated;
+
+-- 1.9 RPC: get_connected_caregiver_for_patient (Used by Patient Dashboard)
 CREATE OR REPLACE FUNCTION public.get_connected_caregiver_for_patient()
 RETURNS TABLE (
   caregiver_id UUID,
@@ -146,6 +235,64 @@ $$;
 
 REVOKE ALL ON FUNCTION public.get_connected_caregiver_for_patient() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.get_connected_caregiver_for_patient() TO authenticated;
+
+-- 1.10 RPC: get_connected_patient_for_caregiver (Used by Caregiver Portal)
+CREATE OR REPLACE FUNCTION public.get_connected_patient_for_caregiver()
+RETURNS TABLE (
+  patient_id UUID,
+  full_name TEXT,
+  preferred_name TEXT,
+  email TEXT,
+  phone TEXT,
+  age INTEGER,
+  gender TEXT,
+  city TEXT,
+  state TEXT,
+  profile_photo_url TEXT,
+  connection_code TEXT,
+  streak_days INTEGER,
+  total_xp INTEGER,
+  connected_at TIMESTAMPTZ
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  v_caregiver_id UUID;
+BEGIN
+  v_caregiver_id := auth.uid();
+  IF v_caregiver_id IS NULL THEN
+    RAISE EXCEPTION 'Authentication required: caller must be logged in' USING ERRCODE = '28000';
+  END IF;
+
+  RETURN QUERY
+  SELECT
+    p.id AS patient_id,
+    COALESCE(p.full_name, p.preferred_name, 'Patient') AS full_name,
+    p.preferred_name,
+    COALESCE(NULLIF(p.email, ''), u.email, '') AS email,
+    p.phone,
+    COALESCE(p.age, 70) AS age,
+    COALESCE(p.gender, 'other') AS gender,
+    COALESCE(p.city, 'Guwahati') AS city,
+    COALESCE(p.state, 'Assam') AS state,
+    COALESCE(p.profile_photo_url, p.avatar_url, '') AS profile_photo_url,
+    COALESCE(p.secondary_language, 'MS-' || UPPER(SUBSTRING(REPLACE(p.id::text, '-', ''), 1, 6))) AS connection_code,
+    COALESCE(p.streak_days, 1) AS streak_days,
+    COALESCE(p.total_xp, 50) AS total_xp,
+    cp.created_at AS connected_at
+  FROM public.caregiver_patient cp
+  JOIN public.profiles p ON p.id = cp.patient_id
+  LEFT JOIN auth.users u ON u.id = p.id
+  WHERE cp.caregiver_id = v_caregiver_id
+  ORDER BY cp.created_at DESC
+  LIMIT 1;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_connected_patient_for_caregiver() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_connected_patient_for_caregiver() TO authenticated;
 
 
 -- ==============================================================================
