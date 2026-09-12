@@ -24,6 +24,8 @@ import {
   Info,
   X,
   Eye,
+  Trash2,
+  AlertTriangle,
 } from 'lucide-react';
 import { useCurrentUser } from '../hooks/useCurrentUser';
 import { useLanguage } from '../hooks/useLanguage';
@@ -89,6 +91,27 @@ export const FamilyCallingPage: React.FC = () => {
       console.warn('Error updating photo:', err);
     } finally {
       setIsUpdatingDetailPhoto(false);
+    }
+  };
+
+  // Delete Member state & handler
+  const [memberToDelete, setMemberToDelete] = useState<FamilyMember | null>(null);
+  const [isDeletingMember, setIsDeletingMember] = useState(false);
+
+  const handleConfirmDelete = async () => {
+    if (!memberToDelete) return;
+    setIsDeletingMember(true);
+    try {
+      await familyService.deleteFamilyMember(memberToDelete.id, currentUser?.id, memberToDelete.name);
+      setFamilyMembers((prev) => prev.filter((m) => m.id !== memberToDelete.id));
+      if (selectedDetailMember?.id === memberToDelete.id) {
+        setSelectedDetailMember(null);
+      }
+      setMemberToDelete(null);
+    } catch (err) {
+      console.error('Error deleting family member:', err);
+    } finally {
+      setIsDeletingMember(false);
     }
   };
 
@@ -324,7 +347,20 @@ export const FamilyCallingPage: React.FC = () => {
                         >
                           {member.name}
                         </button>
-                        <Star className="w-4 h-4 text-amber-500 fill-amber-500 shrink-0" />
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <Star className="w-4 h-4 text-amber-500 fill-amber-500 shrink-0" />
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setMemberToDelete(member);
+                            }}
+                            className="p-1 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors cursor-pointer"
+                            title="Remove family member"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
                       <p className="text-xs font-bold text-amber-800 uppercase tracking-wider mt-0.5">
                         {relText}
@@ -461,6 +497,17 @@ export const FamilyCallingPage: React.FC = () => {
                     title="Message"
                   >
                     <MessageSquare className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setMemberToDelete(member);
+                    }}
+                    type="button"
+                    className="p-2.5 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 hover:text-red-700 cursor-pointer transition-colors"
+                    title="Remove family member"
+                  >
+                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
               </div>
@@ -981,6 +1028,78 @@ export const FamilyCallingPage: React.FC = () => {
               >
                 <MessageSquare className="w-5 h-5" />
                 <span>Chat Message</span>
+              </button>
+            </div>
+
+            {/* Delete Option in Details Modal */}
+            <div className="pt-3.5 border-t border-gray-100 flex items-center justify-between mt-4">
+              <span className="text-[11px] text-gray-400 font-medium">
+                Want to remove this contact?
+              </span>
+              <button
+                onClick={() => {
+                  const m = selectedDetailMember;
+                  setSelectedDetailMember(null);
+                  setMemberToDelete(m);
+                }}
+                type="button"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-red-600 hover:text-red-700 hover:bg-red-50 text-xs font-bold transition-all cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Delete Family Member</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE CONFIRMATION MODAL */}
+      {memberToDelete && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl border border-gray-200 text-center relative animate-scale-up">
+            <div className="w-14 h-14 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center mx-auto mb-4 border border-red-200">
+              <Trash2 className="w-7 h-7" />
+            </div>
+
+            <h3 className="text-lg font-black text-gray-900 mb-1">
+              {currentLang === 'hi' ? 'पारिवारिक सदस्य हटाएं?' : currentLang === 'as' ? 'পৰিয়ালৰ সদস্য আঁতৰাবনে?' : 'Remove Family Member?'}
+            </h3>
+
+            <p className="text-xs text-gray-600 mb-4 font-medium leading-relaxed">
+              {currentLang === 'hi'
+                ? `क्या आप सचमुच "${memberToDelete.name}" को अपने संपर्कों और डेटाबेस से हटाना चाहते हैं?`
+                : currentLang === 'as'
+                ? `আপুনি সঁচাকৈ "${memberToDelete.name}" ক আপোনাৰ যোগাযোগ আৰু ডাটাবেছৰ পৰা আঁতৰাব বিচাৰেনে?`
+                : `Are you sure you want to remove "${memberToDelete.name}" from your family contacts and database?`}
+            </p>
+
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                disabled={isDeletingMember}
+                onClick={() => setMemberToDelete(null)}
+                className="flex-1 py-2.5 px-4 rounded-xl border border-gray-300 font-bold text-xs text-gray-700 hover:bg-gray-100 transition-all cursor-pointer disabled:opacity-50"
+              >
+                {currentLang === 'hi' ? 'रद्द करें' : currentLang === 'as' ? 'বাতিল' : 'Cancel'}
+              </button>
+
+              <button
+                type="button"
+                disabled={isDeletingMember}
+                onClick={handleConfirmDelete}
+                className="flex-1 py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white font-black text-xs shadow-tactile transition-all cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                {isDeletingMember ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>{currentLang === 'hi' ? 'हटा रहे हैं…' : 'Removing…'}</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>{currentLang === 'hi' ? 'हाँ, हटाएं' : currentLang === 'as' ? 'আঁতৰাওক' : 'Yes, Remove'}</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

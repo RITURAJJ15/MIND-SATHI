@@ -526,28 +526,75 @@ class FamilyService {
     return updated;
   }
 
-  public deleteFamilyMember(id: string): boolean {
+  public async deleteFamilyMember(
+    id: string,
+    explicitPatientId?: string,
+    memberName?: string
+  ): Promise<boolean> {
     const target = this.members.find((m) => m.id === id);
-    if (!target) return false;
+    const patientId = target?.userId || explicitPatientId;
+    const name = target?.name || memberName;
 
-    const patientId = target.userId;
+    // 1. Remove from in-memory cache
     this.members = this.members.filter((m) => m.id !== id);
     localStorage.setItem(STORAGE_KEY_FAMILY, JSON.stringify(this.members));
 
+    // 2. Remove from dedicated per-patient localStorage
     if (patientId) {
-      const patientMembers = this.getFamilyMembersForUser(patientId);
+      const patientMembers = this.getFamilyMembersForUser(patientId).filter((m) => m.id !== id);
       localStorage.setItem(`${STORAGE_KEY_FAMILY_PREFIX}${patientId}`, JSON.stringify(patientMembers));
-      offlineDb.familyMembers.delete(id).catch(() => {});
 
+      // Clean up in case duplicate keys exist
+      try {
+        const keys = Object.keys(localStorage);
+        keys.forEach((k) => {
+          if (k.startsWith(STORAGE_KEY_FAMILY_PREFIX)) {
+            const raw = localStorage.getItem(k);
+            if (raw && raw.includes(id)) {
+              try {
+                const arr = JSON.parse(raw);
+                if (Array.isArray(arr)) {
+                  localStorage.setItem(k, JSON.stringify(arr.filter((item: any) => item.id !== id)));
+                }
+              } catch {}
+            }
+          }
+        });
+      } catch {}
+    }
+
+    // 3. Remove from Dexie IndexedDB
+    try {
+      await offlineDb.familyMembers.delete(id);
+    } catch (e) {
+      console.warn('[FamilyService] Dexie delete note:', e);
+    }
+
+    // 4. Delete directly from Supabase via client
+    try {
       if (id.includes('-') && id.length > 20) {
-        supabase
+        await supabase.from('family_members').delete().eq('id', id);
+      }
+      if (patientId && name && patientId.includes('-') && patientId.length > 20) {
+        await supabase
           .from('family_members')
           .delete()
-          .eq('id', id)
-          .then(({ error }) => {
-            if (error) console.warn('[FamilyService] Delete member error:', error.message);
-          });
+          .eq('patient_id', patientId)
+          .eq('name', name);
       }
+    } catch (sbErr) {
+      console.warn('[FamilyService] Supabase delete note:', sbErr);
+    }
+
+    // 5. Also call backend API to guarantee deletion in database regardless of client RLS session
+    try {
+      await fetch('/api/family/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ memberId: id, patientId, name }),
+      });
+    } catch (apiErr) {
+      console.warn('[FamilyService] API delete endpoint note:', apiErr);
     }
 
     return true;
