@@ -29,6 +29,13 @@ export const PatientLiveLocationCard: React.FC<PatientLiveLocationCardProps> = (
   useEffect(() => {
     if (!patientId || patientId === 'guest') return;
 
+    // Initial check for existing pending request or active session on mount
+    liveLocationService.getPendingIncomingRequest(patientId).then((req) => {
+      if (req && req.status === 'requested') {
+        setIncomingRequest(req);
+      }
+    });
+
     const unsubscribe = liveLocationService.subscribeToIncomingRequests(
       patientId,
       (session) => {

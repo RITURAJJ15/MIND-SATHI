@@ -364,6 +364,26 @@ class LiveLocationService {
   }
 
   /**
+   * Retrieves any pending incoming request for a patient.
+   */
+  public async getPendingIncomingRequest(patientId: string): Promise<LiveLocationSession | null> {
+    if (!patientId || patientId === 'guest') return null;
+    try {
+      const { data, error } = await supabase
+        .from('live_location_sessions')
+        .select('*')
+        .eq('patient_id', patientId)
+        .eq('status', 'requested')
+        .maybeSingle();
+
+      if (error || !data) return null;
+      return this.mapRowToSession(data);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Evaluates whether a session's heartbeat is alive.
    * If last_seen_at is older than timeoutSeconds, the connection is considered disconnected.
    */
