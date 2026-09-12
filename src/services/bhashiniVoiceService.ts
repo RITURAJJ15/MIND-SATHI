@@ -284,11 +284,27 @@ class BhashiniVoiceService {
 
       clearTimeout(timeoutId);
 
-      const data: STTResponse = await response.json();
+      const rawText = await response.text();
+      let data: STTResponse | null = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        // Non-JSON response from server (e.g. 500 HTML/text gateway error)
+        const err = new Error(
+          !response.ok
+            ? 'Voice recognition service is temporarily unavailable. Please try again.'
+            : VOICE_ERROR_MESSAGES.BHASHINI_ASR_ERROR
+        ) as any;
+        err.code = 'BHASHINI_ASR_ERROR';
+        throw err;
+      }
 
-      if (!response.ok || !data.success) {
-        const errCode = (data.error as VoiceErrorCode) || 'BHASHINI_ASR_ERROR';
-        const errMessage = data.safeMessage || VOICE_ERROR_MESSAGES[errCode] || VOICE_ERROR_MESSAGES.BHASHINI_ASR_ERROR;
+      if (!response.ok || !data || !data.success) {
+        const errCode = (data?.error as VoiceErrorCode) || 'BHASHINI_ASR_ERROR';
+        const errMessage =
+          data?.safeMessage ||
+          VOICE_ERROR_MESSAGES[errCode] ||
+          VOICE_ERROR_MESSAGES.BHASHINI_ASR_ERROR;
         const error = new Error(errMessage) as any;
         error.code = errCode;
         throw error;
@@ -341,9 +357,14 @@ class BhashiniVoiceService {
       clearTimeout(timeoutId);
 
       if (response.ok) {
-        const data: TTSResponse = await response.json();
-        if (data.success && data.audioContent) {
-          return data.audioContent;
+        const rawText = await response.text();
+        try {
+          const data: TTSResponse = JSON.parse(rawText);
+          if (data && data.success && data.audioContent) {
+            return data.audioContent;
+          }
+        } catch {
+          // Ignored non-json
         }
       }
     } catch {
