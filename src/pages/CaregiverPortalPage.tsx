@@ -46,10 +46,30 @@ export const CaregiverPortalPage: React.FC = () => {
   const { currentLang } = useLanguage();
   const { currentUser } = useCurrentUser('caregiver');
 
+  // Direct active caregiver user state for immediate UI reaction without reload
+  const [activeCaregiverUser, setActiveCaregiverUser] = useState<any | null>(() => {
+    const cg = authService.getCurrentUser('caregiver');
+    if (cg && cg.role === 'caregiver' && cg.id !== 'guest') return cg;
+    return currentUser && currentUser.role === 'caregiver' && currentUser.id !== 'guest' ? currentUser : null;
+  });
+
+  useEffect(() => {
+    const unsub = authService.subscribe(() => {
+      const cg = authService.getCurrentUser('caregiver');
+      if (cg && cg.role === 'caregiver' && cg.id !== 'guest') {
+        setActiveCaregiverUser(cg);
+      }
+    });
+    return unsub;
+  }, []);
+
   // Authentication gate state
-  const isCaregiver = currentUser && currentUser.role === 'caregiver';
+  const isCaregiver = Boolean(
+    (activeCaregiverUser && activeCaregiverUser.role === 'caregiver' && activeCaregiverUser.id !== 'guest') ||
+    (currentUser && currentUser.role === 'caregiver' && currentUser.id !== 'guest')
+  );
   const isElderlyPatient = Boolean(
-    currentUser && (currentUser.role === 'elderly' || (currentUser.role as string) === 'patient')
+    !isCaregiver && currentUser && currentUser.id !== 'guest' && (currentUser.role === 'elderly' || (currentUser.role as string) === 'patient')
   );
   const [assignedCaregiver, setAssignedCaregiver] = useState<any | null>(null);
   const [copiedId, setCopiedId] = useState(false);
@@ -66,58 +86,11 @@ export const CaregiverPortalPage: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [authSubmitting, setAuthSubmitting] = useState(false);
 
-  // Email confirmation & cooldown states
-  const [needsConfirmationNotice, setNeedsConfirmationNotice] = useState(false);
-  const [confirmedEmail, setConfirmedEmail] = useState('');
-  const [resendCooldown, setResendCooldown] = useState(0);
-  const [resendLoading, setResendLoading] = useState(false);
-  const [resendNotice, setResendNotice] = useState('');
-
-  // Countdown timer for resending confirmation emails (does NOT make network calls)
-  useEffect(() => {
-    if (resendCooldown <= 0) return;
-    const interval = setInterval(() => {
-      setResendCooldown((prev) => (prev <= 1 ? 0 : prev - 1));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [resendCooldown]);
-
-  const handleResendConfirmation = async (targetEmail?: string) => {
-    const emailToUse = (targetEmail || confirmedEmail || authEmail).trim();
-    if (!emailToUse) {
-      setAuthError('Please enter your email address to resend the confirmation.');
-      return;
-    }
-    if (resendCooldown > 0 || resendLoading) return;
-
-    setResendLoading(true);
-    setResendNotice('');
-    setAuthError('');
-    try {
-      const res = await authService.resendConfirmationEmail(emailToUse);
-      if (res.success) {
-        setResendNotice(`Confirmation email re-sent to ${emailToUse}! Please check your inbox.`);
-        setResendCooldown(60);
-      } else {
-        if (res.cooldownRemaining) {
-          setResendCooldown(res.cooldownRemaining);
-        }
-        setAuthError(res.error || 'Failed to resend confirmation email.');
-      }
-    } catch (err: any) {
-      setAuthError(err.message || 'Error resending confirmation email.');
-    } finally {
-      setResendLoading(false);
-    }
-  };
-
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (authSubmitting) return; // Prevent double-clicking
     setAuthError('');
     setAuthSuccess('');
-    setResendNotice('');
-    setNeedsConfirmationNotice(false);
     setAuthSubmitting(true);
 
     try {
@@ -131,11 +104,10 @@ export const CaregiverPortalPage: React.FC = () => {
         if (!res.success) {
           setAuthError(res.error || 'Failed to create caregiver account.');
         } else if (res.needsEmailConfirmation) {
-          setConfirmedEmail(res.email || authEmail.trim());
-          setNeedsConfirmationNotice(true);
-          setResendCooldown(60);
+          setAuthSuccess(res.message || 'Caregiver account created! If confirmation is required, please check your inbox before signing in.');
         } else if (res.profile) {
           setAuthSuccess('Caregiver account created successfully!');
+          setActiveCaregiverUser(res.profile);
           await refreshAssignedPatients(res.profile.id);
         }
       } else {
@@ -145,12 +117,9 @@ export const CaregiverPortalPage: React.FC = () => {
         );
         if (!res.success) {
           setAuthError(res.error || 'Login failed. Please verify your email and password.');
-          if (res.isUnconfirmed) {
-            setConfirmedEmail(authEmail.trim());
-            setNeedsConfirmationNotice(true);
-          }
         } else if (res.profile) {
           setAuthSuccess('Signed in successfully!');
+          setActiveCaregiverUser(res.profile);
           await refreshAssignedPatients(res.profile.id);
         }
       }
@@ -258,13 +227,21 @@ export const CaregiverPortalPage: React.FC = () => {
   // Handle Connecting Patient using Registered Email
   const handleConnectByEmail = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!currentUser?.id || !patientIdentifier.trim()) return;
+    const cg = activeCaregiverUser || currentUser;
+    if (!cg?.id) {
+      setLinkError('Please sign in as a caregiver first.');
+      return;
+    }
+    if (!patientIdentifier.trim()) {
+      setLinkError('Please enter a patient email address or connection code.');
+      return;
+    }
     setLinkError('');
     setLinkSuccess('');
     setLinkLoading(true);
 
     try {
-      const res = await caregiverService.linkPatientByEmail(currentUser.id, patientIdentifier.trim());
+      const res = await caregiverService.linkPatientByEmail(cg.id, patientIdentifier.trim());
       if (!res.success || !res.patient) {
         setLinkError(res.error || 'Could not connect to patient. Please check the email address.');
       } else {
@@ -274,7 +251,7 @@ export const CaregiverPortalPage: React.FC = () => {
         if (res.patient) {
           authService.setLinkedPatient(res.patient);
         }
-        await refreshAssignedPatients(currentUser.id);
+        await refreshAssignedPatients(cg.id);
       }
     } catch (err: any) {
       setLinkError(err.message || 'Error connecting to patient.');
@@ -285,12 +262,13 @@ export const CaregiverPortalPage: React.FC = () => {
 
   // Handle Disconnecting / Unlinking Patient
   const handleDisconnectPatient = async () => {
-    if (!currentUser?.id) return;
+    const cg = activeCaregiverUser || currentUser;
+    if (!cg?.id) return;
     const patientName = selectedPatient?.full_name || selectedPatient?.name || 'this patient';
     if (window.confirm(`Are you sure you want to unlink from ${patientName}? Once unlinked, you will no longer have access to their records until you reconnect.`)) {
       setLinkLoading(true);
       try {
-        await caregiverService.unlinkPatient(currentUser.id);
+        await caregiverService.unlinkPatient(cg.id);
         setSelectedPatient(null);
         setAssignedPatients([]);
         setPatientFamily([]);
@@ -305,12 +283,16 @@ export const CaregiverPortalPage: React.FC = () => {
 
   // Handle Linking Patient fallback
   const handleLinkPatient = async (targetIdOrEmail: string) => {
-    if (!currentUser?.id) return;
+    const cg = activeCaregiverUser || currentUser;
+    if (!cg?.id) {
+      setLinkError('Please sign in as a caregiver first.');
+      return;
+    }
     setLinkError('');
     setLinkLoading(true);
 
     try {
-      const res = await caregiverService.linkPatientToCaregiver(currentUser.id, targetIdOrEmail);
+      const res = await caregiverService.linkPatientToCaregiver(cg.id, targetIdOrEmail);
       if (!res.success || !res.patient) {
         setLinkError(res.error || 'Could not connect to patient.');
       } else {
@@ -319,7 +301,7 @@ export const CaregiverPortalPage: React.FC = () => {
         if (res.patient) {
           authService.setLinkedPatient(res.patient);
         }
-        await refreshAssignedPatients(currentUser.id);
+        await refreshAssignedPatients(cg.id);
       }
     } catch (err: any) {
       setLinkError(err.message || 'Error connecting to patient.');
@@ -349,51 +331,6 @@ export const CaregiverPortalPage: React.FC = () => {
               : 'Sign in to access your linked patient\'s cognitive metrics, daily health summary, and safety alerts.'}
           </p>
 
-          {/* Confirmation Notice Block */}
-          {needsConfirmationNotice && (
-            <div className="p-5 mb-5 bg-sky-50 border border-sky-200 text-sky-900 rounded-2xl text-left space-y-3 animate-in fade-in">
-              <div className="flex items-start gap-2.5">
-                <Mail className="w-5 h-5 text-sky-600 shrink-0 mt-0.5" />
-                <div>
-                  <h3 className="text-sm font-extrabold text-sky-900">Check your email to confirm your account</h3>
-                  <p className="text-xs text-sky-700 mt-1 leading-relaxed">
-                    We sent a confirmation link to <strong className="text-sky-950">{confirmedEmail || authEmail}</strong>. Please check your inbox (and spam/junk folder) and click the link to activate your Caregiver account.
-                  </p>
-                </div>
-              </div>
-
-              {resendNotice && (
-                <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>{resendNotice}</span>
-                </div>
-              )}
-
-              <div className="pt-2 border-t border-sky-200 flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  disabled={resendCooldown > 0 || resendLoading}
-                  onClick={() => handleResendConfirmation()}
-                  className="px-3 py-1.5 bg-sky-600 hover:bg-sky-700 disabled:bg-sky-300 text-white text-xs font-bold rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
-                >
-                  {resendLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mail className="w-3.5 h-3.5" />}
-                  <span>{resendCooldown > 0 ? `Resend email in (${resendCooldown}s)` : 'Resend confirmation email'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAuthMode('signin');
-                    setNeedsConfirmationNotice(false);
-                    setAuthError('');
-                  }}
-                  className="px-3 py-1.5 bg-white border border-sky-300 hover:bg-sky-100 text-sky-800 text-xs font-bold rounded-xl transition-all cursor-pointer shadow-xs"
-                >
-                  Already confirmed? Sign In
-                </button>
-              </div>
-            </div>
-          )}
-
           {/* Error / Success Banners */}
           {authError && (
             <div className="p-4 mb-5 bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold rounded-2xl text-left space-y-2 animate-in fade-in">
@@ -402,21 +339,21 @@ export const CaregiverPortalPage: React.FC = () => {
                 <span className="leading-relaxed">{authError}</span>
               </div>
               <div className="pt-2 border-t border-rose-200 flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => { setAuthMode('signin'); setAuthError(''); }}
-                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer shadow-xs"
-                >
-                  Switch to Sign In Tab
-                </button>
-                {authError.toLowerCase().includes('confirm') && (
+                {authMode === 'signup' ? (
                   <button
                     type="button"
-                    disabled={resendCooldown > 0 || resendLoading}
-                    onClick={() => handleResendConfirmation()}
-                    className="px-3 py-1.5 bg-white border border-rose-300 hover:bg-rose-100 text-rose-800 font-bold rounded-xl text-xs transition-colors cursor-pointer shadow-xs"
+                    onClick={() => { setAuthMode('signin'); setAuthError(''); }}
+                    className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer shadow-xs"
                   >
-                    {resendCooldown > 0 ? `Resend available in (${resendCooldown}s)` : 'Resend Confirmation Email'}
+                    Switch to Sign In Tab
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => { setAuthMode('signup'); setAuthError(''); }}
+                    className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer shadow-xs"
+                  >
+                    Switch to Create Account Tab
                   </button>
                 )}
               </div>
@@ -679,21 +616,21 @@ export const CaregiverPortalPage: React.FC = () => {
           <form onSubmit={handleConnectByEmail} className="space-y-4 mb-6 text-left">
             <div>
               <label className="block text-xs font-bold text-gray-700 mb-1 uppercase tracking-wider">
-                Patient's Registered Email ID
+                Patient's Registered Email ID or Connection Code
               </label>
               <div className="relative">
                 <Mail className="w-4 h-4 text-gray-400 absolute left-3.5 top-3.5" />
                 <input
-                  type="email"
+                  type="text"
                   required
                   value={patientIdentifier}
                   onChange={(e) => setPatientIdentifier(e.target.value)}
-                  placeholder="e.g. senior@gmail.com"
+                  placeholder="e.g. senior@gmail.com or MS-A1B2C3"
                   className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-10 pr-4 py-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
               <p className="text-[11px] text-gray-500 mt-1.5">
-                💡 Enter the exact Google or email account your patient used to register in MIND SATHI.
+                💡 Enter the patient's registered email address or their 6-character connection code (e.g. MS-XXXXXX).
               </p>
             </div>
 
@@ -859,7 +796,14 @@ export const CaregiverPortalPage: React.FC = () => {
         </div>
 
         {/* Detailed Senior Data Badges */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4">
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-4">
+          <div className="bg-emerald-50/80 p-3 rounded-xl border border-emerald-200">
+            <div className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider">Connection Code</div>
+            <div className="text-xs font-black text-emerald-950 mt-0.5 tracking-wider truncate">
+              {selectedPatient.connectionCode || selectedPatient.secondary_language || ('MS-' + (selectedPatient.id || '').replace(/-/g, '').substring(0, 6).toUpperCase())}
+            </div>
+          </div>
+
           <div className="bg-gray-50 p-3 rounded-xl border border-gray-100">
             <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Registered Phone</div>
             <div className="text-xs font-extrabold text-gray-800 mt-0.5 truncate">
