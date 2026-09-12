@@ -705,11 +705,120 @@ async function handleSyncApiRoute(req: http.IncomingMessage, res: http.ServerRes
   return true;
 }
 
+async function handleBhashiniApiRoute(req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
+  const url = req.url?.split('?')[0] || '';
+  if (!url.startsWith('/api/bhashini/')) {
+    return false;
+  }
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    });
+    res.end();
+    return true;
+  }
+
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { success: false, error: 'Method not allowed' });
+    return true;
+  }
+
+  const { callBhashiniASR, callBhashiniTTS, getBhashiniCredentials } = await import('./bhashiniServerHelper');
+  const { inferenceKey, udyatKey } = getBhashiniCredentials();
+
+  if (!inferenceKey && !udyatKey) {
+    sendJson(res, 503, {
+      success: false,
+      error: 'VOICE_SERVICE_NOT_CONFIGURED',
+      message: 'Bhashini API keys (BHASHINI_INFERENCE_API_KEY or BHASHINI_UDYAT_KEY) are not configured on the server.',
+    });
+    return true;
+  }
+
+  let body: any = {};
+  try {
+    body = await parseJsonBody(req);
+  } catch {
+    sendJson(res, 400, { success: false, error: 'Invalid JSON request body.' });
+    return true;
+  }
+
+  // 1. Speech-to-Text (ASR)
+  if (url === '/api/bhashini/speech-to-text') {
+    try {
+      const { audioContent, language = 'hi', audioFormat = 'wav' } = body;
+      if (!audioContent || typeof audioContent !== 'string') {
+        sendJson(res, 400, { success: false, error: 'INVALID_AUDIO_DATA' });
+        return true;
+      }
+
+      const cleanBase64 = audioContent.includes('base64,')
+        ? audioContent.split('base64,')[1]
+        : audioContent;
+
+      const text = await callBhashiniASR({
+        audioBase64: cleanBase64,
+        language,
+        audioFormat,
+      });
+
+      sendJson(res, 200, { success: true, text, language });
+      return true;
+    } catch (err: any) {
+      if (err.message === 'VOICE_SERVICE_NOT_CONFIGURED') {
+        sendJson(res, 503, { success: false, error: err.message });
+        return true;
+      }
+      if (err.message === 'NO_SPEECH_RECOGNIZED') {
+        sendJson(res, 200, { success: false, error: 'NO_SPEECH_RECOGNIZED', text: '' });
+        return true;
+      }
+      sendJson(res, 502, { success: false, error: 'BHASHINI_STT_UNAVAILABLE' });
+      return true;
+    }
+  }
+
+  // 2. Text-to-Speech (TTS)
+  if (url === '/api/bhashini/text-to-speech') {
+    try {
+      const { text, language = 'hi', gender = 'female' } = body;
+      if (!text || typeof text !== 'string' || !text.trim()) {
+        sendJson(res, 400, { success: false, error: 'INVALID_TEXT_INPUT' });
+        return true;
+      }
+
+      const { audioContent, audioFormat } = await callBhashiniTTS({
+        text: text.trim(),
+        language,
+        gender,
+      });
+
+      sendJson(res, 200, { success: true, audioContent, audioFormat, language });
+      return true;
+    } catch (err: any) {
+      if (err.message === 'VOICE_SERVICE_NOT_CONFIGURED') {
+        sendJson(res, 503, { success: false, error: err.message });
+        return true;
+      }
+      sendJson(res, 502, { success: false, error: 'BHASHINI_TTS_UNAVAILABLE' });
+      return true;
+    }
+  }
+
+  sendJson(res, 404, { success: false, error: 'Unknown Bhashini endpoint' });
+  return true;
+}
+
 export function geminiBackendPlugin(): Plugin {
   return {
     name: 'vite-gemini-backend-proxy',
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
+        const handledBhashini = await handleBhashiniApiRoute(req, res);
+        if (handledBhashini) return;
         const handledGemini = await handleGeminiApiRoute(req, res);
         if (handledGemini) return;
         const handledSync = await handleSyncApiRoute(req, res);
@@ -719,6 +828,8 @@ export function geminiBackendPlugin(): Plugin {
     },
     configurePreviewServer(server) {
       server.middlewares.use(async (req, res, next) => {
+        const handledBhashini = await handleBhashiniApiRoute(req, res);
+        if (handledBhashini) return;
         const handledGemini = await handleGeminiApiRoute(req, res);
         if (handledGemini) return;
         const handledSync = await handleSyncApiRoute(req, res);
@@ -728,3 +839,4 @@ export function geminiBackendPlugin(): Plugin {
     },
   };
 }
+

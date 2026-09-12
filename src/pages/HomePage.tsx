@@ -18,6 +18,8 @@ import { locationService } from '../services/locationService';
 import { PatientLocation } from '../types/location';
 import { HomeLocationModal } from '../components/location/HomeLocationModal';
 import { PatientLiveLocationCard } from '../components/location/PatientLiveLocationCard';
+import { BhashiniVoiceAssistant } from '../components/voice/BhashiniVoiceAssistant';
+import { VoiceErrorBoundary } from '../components/voice/VoiceErrorBoundary';
 import { FamilyMember } from '../types/family';
 import { supabase } from '../lib/supabase';
 import {
@@ -670,6 +672,14 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
         caregiverName={assignedCaregiver?.full_name || assignedCaregiver?.name}
         isCaregiverLinked={Boolean(assignedCaregiver)}
       />
+
+      {/* Multilingual Voice Assistant powered by Bhashini AI & Gemini */}
+      <VoiceErrorBoundary>
+        <BhashiniVoiceAssistant
+          onPlayGame={(gameId) => onNavigate('play', gameId)}
+          onNavigate={(tab) => onNavigate(tab)}
+        />
+      </VoiceErrorBoundary>
 
       {/* Top Grid: Personalized Recommendation & Streak/XP */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
