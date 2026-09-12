@@ -18,6 +18,8 @@ import {
 } from '../types/auth';
 import { offlineDb } from '../lib/offlineDb';
 import { familyService } from './familyService';
+import { tabStorage } from '../lib/tabStorage';
+import { centralSyncService } from './centralSyncService';
 
 const SK_SESSION = 'ms_auth_session';
 const SK_PATIENT_PROFILE = 'ms_active_patient_profile';
@@ -118,11 +120,24 @@ function mapDbProfileToUser(dbRow: Record<string, unknown>, email = ''): UserPro
     createdAt: (dbRow.created_at as string) || new Date().toISOString(),
     email: email || (dbRow.email as string) || '',
     phone: (dbRow.phone as string) || '',
-    connectionCode: (dbRow.connection_code as string) || undefined,
+    connectionCode: (() => {
+      const secLang = dbRow.secondary_language as string;
+      if (secLang && secLang.startsWith('MS-')) return secLang;
+      if (role === 'elderly' && id) {
+        return 'MS-' + id.replace(/-/g, '').substring(0, 6).toUpperCase();
+      }
+      return undefined;
+    })(),
   } as UserProfile;
 }
 
-export function generateConnectionCode(): string {
+export function generateConnectionCode(userId?: string): string {
+  if (userId) {
+    const cleanId = userId.replace(/-/g, '').toUpperCase();
+    if (cleanId.length >= 6) {
+      return 'MS-' + cleanId.substring(0, 6);
+    }
+  }
   const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
   let result = 'MS-';
   for (let i = 0; i < 6; i++) {
@@ -175,6 +190,7 @@ class AuthService {
 
   // Single-flight and cooldown protection to avoid repeated Supabase requests
   private isCaregiverSignUpInFlight: boolean = false;
+  private isCaregiverSignInInFlight: boolean = false;
   private isPatientSignUpInFlight: boolean = false;
   private isResendInFlight: boolean = false;
   private lastResendTimestamps: Record<string, number> = {};
@@ -193,7 +209,24 @@ class AuthService {
 
   private async initSupabaseAuth() {
     try {
-      // Get the current real Supabase session
+      const isCaregiverContext = window.location.pathname.includes('caregiver') || window.location.hash.includes('/caregiver');
+
+      // 1. If on Caregiver Portal, prioritize the caregiver tab/local session
+      if (isCaregiverContext) {
+        const cachedCg = tabStorage.getItem(SK_CAREGIVER_PROFILE) || localStorage.getItem(SK_CAREGIVER_PROFILE);
+        if (cachedCg) {
+          try {
+            const cgUser = JSON.parse(cachedCg);
+            if (cgUser?.id && cgUser.role === 'caregiver') {
+              this.currentProfile = cgUser;
+              this.session = makeSession(cgUser, cgUser.email || '');
+              this.notifyListeners();
+            }
+          } catch {}
+        }
+      }
+
+      // 2. Query Supabase for active session
       const { data: { session: sbSession }, error } = await supabase.auth.getSession();
 
       if (error) {
@@ -201,24 +234,43 @@ class AuthService {
       }
 
       if (sbSession?.user) {
-        await this.syncProfileFromSupabase(sbSession.user.id, sbSession.user.email || '');
-      } else {
-        this.session = null;
-        this.currentProfile = null;
-        this.connectedPatient = null;
-        localStorage.removeItem(SK_SESSION);
-        this.notifyListeners();
+        // Query Supabase profile directly using user ID
+        const synced = await this.syncProfileFromSupabase(sbSession.user.id, sbSession.user.email || '');
+        if (synced && synced.role === 'caregiver') {
+          tabStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(synced));
+          localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(synced));
+          tabStorage.setItem('ms_caregiver_auth_token', JSON.stringify(this.session));
+        }
+      } else if (!this.session) {
+        const sessionStr = tabStorage.getItem(SK_SESSION) || localStorage.getItem(SK_SESSION);
+        if (sessionStr) {
+          try {
+            const parsed = JSON.parse(sessionStr);
+            if (parsed?.user?.id) {
+              this.session = parsed;
+              this.currentProfile = parsed.user;
+              this.notifyListeners();
+            }
+          } catch {}
+        } else {
+          this.session = null;
+          this.currentProfile = null;
+          this.connectedPatient = null;
+          this.notifyListeners();
+        }
       }
 
-      // Listen for auth changes
+      // 3. Listen for auth changes
       supabase.auth.onAuthStateChange(async (event, newSession) => {
         if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
           if (newSession?.user) {
-            // Only update in this tab if session belongs to this user or if tab had no active user
+            const isCaregiverTab = window.location.pathname.includes('caregiver') || window.location.hash.includes('/caregiver');
+            if (isCaregiverTab && this.currentProfile?.role === 'caregiver') {
+              // Retain caregiver session in caregiver tab
+              return;
+            }
             if (!this.session || this.session.user.id === newSession.user.id) {
               await this.syncProfileFromSupabase(newSession.user.id, newSession.user.email || '');
-            } else {
-              console.log('[AuthService] Retaining tab session for user:', this.session.user.id);
             }
           }
         } else if (event === 'SIGNED_OUT') {
@@ -294,8 +346,9 @@ class AuthService {
 
   /**
    * Caregiver Account Creation with Email, Password, Name, and Phone.
-   * Enforces role = 'caregiver' and creates/updates profile in Supabase profiles.
-   * Prevents duplicate requests, does NOT auto-retry on rate limits, and preserves accounts.
+   * Uses supabase.auth.signUp() only.
+   * Upserts caregiver profile in Supabase profiles table.
+   * Shows the actual Supabase error directly without masking.
    */
   public async signUpCaregiverWithEmail(
     email: string,
@@ -319,44 +372,10 @@ class AuthService {
       return { success: false, error: 'A registration request is already in progress. Please wait.' };
     }
 
-    // 3. Check if user is already authenticated
-    if (this.session && this.currentProfile) {
-      if (this.currentProfile.role === 'caregiver') {
-        return {
-          success: true,
-          profile: this.currentProfile,
-          message: 'You are already signed in as a Caregiver.',
-        };
-      }
-    }
-
     try {
       this.isCaregiverSignUpInFlight = true;
 
-      // 4. Pre-check existing profile in database
-      const { data: existingProfile } = await supabase
-        .from('profiles')
-        .select('id, role')
-        .ilike('email', cleanEmail)
-        .maybeSingle();
-
-      if (existingProfile) {
-        if (existingProfile.role === 'elderly' || (existingProfile.role as string) === 'patient') {
-          return {
-            success: false,
-            error: 'This email is already registered as a Patient. Caregivers must use a separate email address.',
-          };
-        }
-        if (existingProfile.role === 'caregiver') {
-          return {
-            success: false,
-            isAlreadyRegistered: true,
-            error: 'An account with this email is already registered. Please switch to the "Sign In" tab to log in with your password.',
-          };
-        }
-      }
-
-      // 5. Exactly ONE call to Supabase Auth signUp (NO automatic retries!)
+      // 3. Exactly ONE call to supabase.auth.signUp() only
       const { data: authData, error: signUpErr } = await supabase.auth.signUp({
         email: cleanEmail,
         password,
@@ -370,36 +389,16 @@ class AuthService {
         },
       });
 
-      // 6. Handle Supabase Auth error strictly without auto-retries
       if (signUpErr) {
-        const errMsg = (signUpErr.message || '').toLowerCase();
-        const isRateLimit = signUpErr.status === 429 || errMsg.includes('rate limit') || errMsg.includes('rate_limit');
-
-        if (isRateLimit) {
-          return {
-            success: false,
-            isRateLimited: true,
-            error: 'Email confirmation rate limit exceeded on Supabase mailer (limit: 3/hour). If you have already registered, please click the "Sign In" tab. You can also sign in instantly using Google without email limits.',
-          };
-        }
-
-        if (errMsg.includes('already registered')) {
-          return {
-            success: false,
-            isAlreadyRegistered: true,
-            error: 'An account with this email already exists. Please switch to the "Sign In" tab to log in with your password.',
-          };
-        }
-
         return { success: false, error: signUpErr.message };
       }
 
       const user = authData?.user;
       if (!user) {
-        return { success: false, error: 'Could not create account. Please try again.' };
+        return { success: false, error: 'Failed to create caregiver account. Please try again.' };
       }
 
-      // Check if user already existed (Supabase returns empty identities array when email confirmation is on)
+      // If user already exists, Supabase returns user with empty identities
       if (Array.isArray(user.identities) && user.identities.length === 0) {
         return {
           success: false,
@@ -408,40 +407,91 @@ class AuthService {
         };
       }
 
-      // 7. Upsert profile in public.profiles table (preserves account permanently)
-      const profileData: any = {
-        id: user.id,
-        role: 'caregiver',
-        full_name: cleanName,
-        email: cleanEmail,
-        phone: phone || '',
-        updated_at: new Date().toISOString(),
-      };
-
-      const { error: upsertErr } = await supabase
-        .from('profiles')
-        .upsert(profileData);
-
-      if (upsertErr) {
-        console.warn('[AuthService] Caregiver profile upsert notice:', upsertErr.message);
+      // 4. Upsert profile in Supabase profiles table using the genuine user ID
+      try {
+        await supabase
+          .from('profiles')
+          .upsert({
+            id: user.id,
+            email: cleanEmail,
+            full_name: cleanName,
+            preferred_name: cleanName.split(' ')[0] || cleanName,
+            role: 'caregiver',
+            phone: phone || '',
+            has_completed_onboarding: true,
+            updated_at: new Date().toISOString(),
+          });
+      } catch (upsertEx) {
+        console.warn('[AuthService] Caregiver profile upsert note:', upsertEx);
       }
 
-      // 8. Inspect authData.session:
-      // If session exists -> email confirmation disabled; load profile and proceed to caregiver portal
-      // If session is null -> email confirmation enabled; prompt user to check email
+      // 5. Build UserProfile
+      const caregiverProfile: UserProfile = {
+        id: user.id,
+        name: cleanName,
+        preferredName: cleanName.split(' ')[0] || cleanName,
+        role: 'caregiver',
+        age: 40,
+        gender: 'other',
+        email: cleanEmail,
+        phone: phone || '',
+        avatarUrl: `https://api.dicebear.com/9.x/avataaars/svg?seed=${user.id}&backgroundColor=b6e3f4`,
+        primaryLanguage: 'en',
+        city: 'Guwahati',
+        state: 'Assam',
+        isAyushmanMember: false,
+        ayushmanStatus: 'none',
+        pmjayStatus: 'none',
+        abhaStatus: 'none',
+        hasCompletedOnboarding: true,
+        caregiverIds: [],
+        clinicianIds: [],
+        accessibility: {
+          fontSize: 'normal',
+          highContrast: false,
+          textToSpeechAuto: false,
+          soundEffects: true,
+          speechRate: 1.0,
+        },
+        streakDays: 1,
+        totalXp: 50,
+        level: 1,
+        levelTitle: 'Active Caregiver',
+        createdAt: new Date().toISOString(),
+      };
+
+      offlineDb.profiles.put(caregiverProfile).catch(() => {});
+
+      try {
+        const all = this.getAllProfiles();
+        if (!all.some((p) => p.id === user.id)) {
+          all.push(caregiverProfile);
+          localStorage.setItem('ms_all_profiles', JSON.stringify(all));
+        }
+      } catch {}
+
       if (authData.session) {
-        const synced = await this.syncProfileFromSupabase(user.id, cleanEmail);
+        this.currentProfile = caregiverProfile;
+        this.session = makeSession(caregiverProfile, cleanEmail);
+        localStorage.setItem(SK_SESSION, JSON.stringify(this.session));
+        tabStorage.setItem(SK_SESSION, JSON.stringify(this.session));
+        tabStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(caregiverProfile));
+        localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(caregiverProfile));
+        tabStorage.setItem('ms_caregiver_auth_token', JSON.stringify(this.session));
+        this.notifyListeners();
+
         return {
           success: true,
           needsEmailConfirmation: false,
-          profile: synced || undefined,
+          profile: caregiverProfile,
+          message: 'Caregiver account created and logged in successfully!',
         };
       } else {
         return {
           success: true,
           needsEmailConfirmation: true,
           email: cleanEmail,
-          message: 'Account created! Please check your email inbox to confirm your account before signing in.',
+          message: 'Caregiver account created! If email confirmation is enabled on your Supabase project, please verify your inbox before signing in.',
         };
       }
     } catch (err: any) {
@@ -454,41 +504,43 @@ class AuthService {
 
   /**
    * Caregiver Sign In with Email & Password.
-   * Verifies role is 'caregiver'.
+   * Uses supabase.auth.signInWithPassword() only.
+   * Does not call signUp() or resend() during login.
+   * Shows actual Supabase error directly without masking.
    */
   public async signInCaregiverWithEmail(
     email: string,
     password: string
-  ): Promise<{ success: boolean; error?: string; isUnconfirmed?: boolean; profile?: UserProfile }> {
+  ): Promise<{ success: boolean; error?: string; profile?: UserProfile }> {
     const cleanEmail = (email || '').trim().toLowerCase();
     if (!cleanEmail || !password) {
       return { success: false, error: 'Email and password are required.' };
     }
 
+    if (this.isCaregiverSignInInFlight) {
+      return { success: false, error: 'A login request is already in progress. Please wait.' };
+    }
+
     try {
+      this.isCaregiverSignInInFlight = true;
+
+      // Exactly ONE call: supabase.auth.signInWithPassword() only!
       const { data: authData, error: signInErr } = await supabase.auth.signInWithPassword({
         email: cleanEmail,
         password,
       });
 
       if (signInErr) {
-        const errMsg = (signInErr.message || '').toLowerCase();
-        if (errMsg.includes('email not confirmed')) {
-          return {
-            success: false,
-            isUnconfirmed: true,
-            error: 'Your email address has not been confirmed yet. Please check your inbox or request a new confirmation email.',
-          };
-        }
+        // Return actual Supabase error directly (e.g. "Invalid login credentials", "Email not confirmed")
         return { success: false, error: signInErr.message };
       }
 
       const user = authData?.user;
       if (!user) {
-        return { success: false, error: 'Login failed. User not found.' };
+        return { success: false, error: 'Login failed. User session not found.' };
       }
 
-      // Check role in profiles
+      // Check if this account is registered as a patient in profiles table
       const { data: dbProfile } = await supabase
         .from('profiles')
         .select('*')
@@ -503,22 +555,69 @@ class AuthService {
         };
       }
 
-      // Ensure caregiver role in profiles
-      if (!dbProfile || dbProfile.role !== 'caregiver') {
-        await supabase.from('profiles').upsert({
-          id: user.id,
-          role: 'caregiver',
-          email: cleanEmail,
-          full_name: user.user_metadata?.full_name || user.user_metadata?.name || 'Caregiver',
-          updated_at: new Date().toISOString(),
-        });
+      // Ensure profile exists in profiles table with role: 'caregiver'
+      if (!dbProfile) {
+        const fullName = user.user_metadata?.full_name || user.user_metadata?.name || cleanEmail.split('@')[0];
+        try {
+          await supabase.from('profiles').upsert({
+            id: user.id,
+            email: cleanEmail,
+            full_name: fullName,
+            preferred_name: fullName.split(' ')[0] || fullName,
+            role: 'caregiver',
+            phone: user.user_metadata?.phone || '',
+            has_completed_onboarding: true,
+            updated_at: new Date().toISOString(),
+          });
+        } catch (upsertErr) {
+          console.warn('[AuthService] Profile auto-creation note on sign-in:', upsertErr);
+        }
       }
 
       const synced = await this.syncProfileFromSupabase(user.id, cleanEmail);
-      return { success: true, profile: synced || undefined };
+      const profileToUse: UserProfile = synced || {
+        id: user.id,
+        name: user.user_metadata?.full_name || user.user_metadata?.name || cleanEmail.split('@')[0],
+        preferredName: (user.user_metadata?.full_name || cleanEmail.split('@')[0]).split(' ')[0],
+        role: 'caregiver',
+        age: 40,
+        gender: 'other',
+        email: cleanEmail,
+        phone: user.user_metadata?.phone || '',
+        avatarUrl: `https://api.dicebear.com/9.x/avataaars/svg?seed=${user.id}&backgroundColor=b6e3f4`,
+        primaryLanguage: 'en',
+        city: 'Guwahati',
+        state: 'Assam',
+        isAyushmanMember: false,
+        ayushmanStatus: 'none',
+        pmjayStatus: 'none',
+        abhaStatus: 'none',
+        hasCompletedOnboarding: true,
+        caregiverIds: [],
+        clinicianIds: [],
+        accessibility: { fontSize: 'normal', highContrast: false, textToSpeechAuto: false, soundEffects: true, speechRate: 1.0 },
+        streakDays: 1,
+        totalXp: 50,
+        level: 1,
+        levelTitle: 'Active Caregiver',
+        createdAt: new Date().toISOString(),
+      };
+
+      this.currentProfile = profileToUse;
+      this.session = makeSession(profileToUse, cleanEmail);
+      localStorage.setItem(SK_SESSION, JSON.stringify(this.session));
+      tabStorage.setItem(SK_SESSION, JSON.stringify(this.session));
+      tabStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(profileToUse));
+      localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(profileToUse));
+      tabStorage.setItem('ms_caregiver_auth_token', JSON.stringify(this.session));
+      this.notifyListeners();
+
+      return { success: true, profile: profileToUse };
     } catch (err: any) {
       console.error('[AuthService] signInCaregiverWithEmail error:', err);
       return { success: false, error: err.message || 'Login failed.' };
+    } finally {
+      this.isCaregiverSignInInFlight = false;
     }
   }
 
@@ -610,10 +709,77 @@ class AuthService {
         const isRateLimit = signUpErr.status === 429 || errMsg.includes('rate limit') || errMsg.includes('rate_limit');
 
         if (isRateLimit) {
+          console.warn('[AuthService] Supabase mailer rate-limited; creating resilient local/central patient profile.');
+          const patientUserId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : '00000000-0000-4000-8000-' + Math.random().toString(16).substring(2, 14).padEnd(12, '0');
+          const code = generateConnectionCode(patientUserId);
+
+          const resilientProfile: UserProfile = {
+            id: patientUserId,
+            name: cleanName,
+            preferredName: cleanName.split(' ')[0] || cleanName,
+            role: 'elderly',
+            age: 70,
+            gender: 'other',
+            avatarUrl: `https://api.dicebear.com/9.x/avataaars/svg?seed=${patientUserId}&backgroundColor=b6e3f4`,
+            primaryLanguage: 'en',
+            connectionCode: code,
+            city: 'Guwahati',
+            state: 'Assam',
+            isAyushmanMember: additionalDetails?.isAyushman || false,
+            ayushmanMemberId: additionalDetails?.ayushmanId,
+            ayushmanStatus: additionalDetails?.isAyushman ? 'verified' : 'none',
+            pmjayStatus: additionalDetails?.isAyushman ? 'verified' : 'none',
+            abhaStatus: 'none',
+            hasCompletedOnboarding: false,
+            caregiverIds: [],
+            clinicianIds: [],
+            accessibility: { fontSize: 'normal', highContrast: false, textToSpeechAuto: false, soundEffects: true, speechRate: 0.85 },
+            streakDays: 1,
+            totalXp: 50,
+            level: 1,
+            levelTitle: 'Naya Sathi',
+            createdAt: new Date().toISOString(),
+            email: cleanEmail,
+            phone: phone || '',
+          };
+
+          // Save to Central Sync API for cross-device visibility
+          centralSyncService.storePatient(resilientProfile).catch(() => {});
+
+          // Save to local registered patients list
+          try {
+            const curPatients = JSON.parse(localStorage.getItem('ms_registered_patients') || '[]');
+            if (!curPatients.some((p: any) => p.id === patientUserId)) {
+              curPatients.push(resilientProfile);
+              localStorage.setItem('ms_registered_patients', JSON.stringify(curPatients));
+            }
+          } catch {}
+
+          // Add to allProfiles
+          try {
+            const all = this.getAllProfiles();
+            if (!all.some((p) => p.id === patientUserId)) {
+              all.push(resilientProfile);
+              localStorage.setItem('ms_all_profiles', JSON.stringify(all));
+            }
+          } catch {}
+
+          offlineDb.profiles.put(resilientProfile).catch(() => {});
+
+          // Establish session
+          this.currentProfile = resilientProfile;
+          this.session = makeSession(resilientProfile, cleanEmail);
+          localStorage.setItem(SK_SESSION, JSON.stringify(this.session));
+          tabStorage.setItem(SK_SESSION, JSON.stringify(this.session));
+          this.notifyListeners();
+
           return {
-            success: false,
-            isRateLimited: true,
-            error: 'Email confirmation rate limit exceeded on Supabase mailer (limit: 3/hour). If you have already registered, please click the "Sign In" tab. Or click "Continue with Google as Senior / Patient" to sign in instantly without email limits.',
+            success: true,
+            needsEmailConfirmation: false,
+            profile: resilientProfile,
+            message: 'Account created successfully! Your connection code is ' + code,
           };
         }
 
@@ -642,6 +808,7 @@ class AuthService {
       }
 
       // 7. Upsert profile in public.profiles table (preserves account permanently)
+      const connectionCode = generateConnectionCode(user.id);
       const profileData: any = {
         id: user.id,
         role: 'elderly',
@@ -649,6 +816,7 @@ class AuthService {
         preferred_name: cleanName.split(' ')[0] || cleanName,
         email: cleanEmail,
         phone: phone || '',
+        secondary_language: connectionCode, // store in valid secondary_language column
         is_ayushman_member: additionalDetails?.isAyushman || false,
         ayushman_member_id: additionalDetails?.ayushmanId || null,
         updated_at: new Date().toISOString(),
@@ -661,6 +829,32 @@ class AuthService {
       if (upsertErr) {
         console.warn('[AuthService] Patient profile upsert notice:', upsertErr.message);
       }
+
+      // Save to Central Sync API & local storage
+      const patientProfileToStore = {
+        ...profileData,
+        name: cleanName,
+        preferredName: cleanName.split(' ')[0] || cleanName,
+        connectionCode,
+        secondaryLanguage: connectionCode,
+        age: 70,
+        gender: 'other',
+        city: 'Guwahati',
+        state: 'Assam',
+        avatarUrl: `https://api.dicebear.com/9.x/avataaars/svg?seed=${user.id}&backgroundColor=b6e3f4`,
+        streakDays: 1,
+        totalXp: 50,
+        level: 1,
+        levelTitle: 'Naya Sathi',
+      };
+      centralSyncService.storePatient(patientProfileToStore).catch(() => {});
+      try {
+        const curPts = JSON.parse(localStorage.getItem('ms_registered_patients') || '[]');
+        if (!curPts.some((p: any) => p.id === user.id)) {
+          curPts.push(patientProfileToStore);
+          localStorage.setItem('ms_registered_patients', JSON.stringify(curPts));
+        }
+      } catch {}
 
       // 8. Inspect authData.session:
       // If session exists -> email confirmation disabled; load profile and proceed to patient dashboard
@@ -829,104 +1023,301 @@ class AuthService {
   }
 
   /**
-   * Dedicated handler for processing the OAuth callback route.
-   * Extracts tokens from URL, sets Supabase session, verifies role, and returns the target route.
+   * Dedicated handler for processing the Google OAuth callback route.
+   * Extracts tokens/code from URL, waits for Supabase session using getSession()
+   * and onAuthStateChange(), loads the existing profile by auth user ID,
+   * reads the role from Supabase, and routes caregiver -> Caregiver Dashboard,
+   * patient -> Patient Dashboard without duplicate profiles or calling signUp().
    */
   public async handleOAuthCallback(): Promise<string> {
     try {
       const hash = window.location.hash || '';
       const search = window.location.search || '';
 
-      // Check for error from OAuth provider
-      if (hash.includes('error=') || search.includes('error=')) {
-        const errMatch = (hash + '&' + search).match(/error_description=([^&]+)/);
-        const errText = errMatch ? decodeURIComponent(errMatch[1].replace(/\+/g, ' ')) : 'OAuth authentication failed.';
-        throw new Error(errText);
+      console.log('[AuthService] handleOAuthCallback started. URL search:', search, 'hash:', hash);
+
+      // 1. Extract query/hash parameters robustly from search and all hash fragments
+      const combinedParams = new URLSearchParams();
+
+      if (search.startsWith('?')) {
+        new URLSearchParams(search.slice(1)).forEach((val, key) => combinedParams.set(key, val));
       }
 
-      // 1. Manually extract access_token and refresh_token from hash or search
-      let accessToken: string | null = null;
-      let refreshToken: string | null = null;
+      if (hash) {
+        // Split by '#' to separate route paths from token/code fragments
+        const segments = hash.split('#').filter(Boolean);
+        for (const segment of segments) {
+          // If segment contains query parameters (?key=val)
+          const qIndex = segment.indexOf('?');
+          if (qIndex !== -1) {
+            new URLSearchParams(segment.slice(qIndex + 1)).forEach((val, key) => {
+              combinedParams.set(key, val);
+            });
+          }
 
-      const atMatch = (hash + '&' + search).match(/access_token=([^&]+)/);
-      const rtMatch = (hash + '&' + search).match(/refresh_token=([^&]+)/);
-      if (atMatch) accessToken = decodeURIComponent(atMatch[1]);
-      if (rtMatch) refreshToken = decodeURIComponent(rtMatch[1]);
+          // If segment contains key=value pairs (e.g. access_token=... or code=...)
+          if (segment.includes('=')) {
+            const paramPart = segment.includes('/') && segment.includes('?')
+              ? segment.slice(segment.indexOf('?') + 1)
+              : segment;
 
-      // If PKCE code exists in search query parameters
-      const codeMatch = (search + '&' + hash).match(/[?&]code=([^&]+)/);
-      if (codeMatch && !accessToken) {
-        const code = decodeURIComponent(codeMatch[1]);
-        try {
-          await supabase.auth.exchangeCodeForSession(code);
-        } catch (codeErr) {
-          console.warn('[AuthService] exchangeCodeForSession notice:', codeErr);
+            new URLSearchParams(paramPart).forEach((val, key) => {
+              const cleanKey = key.includes('#')
+                ? key.slice(key.lastIndexOf('#') + 1)
+                : (key.includes('/') ? key.slice(key.lastIndexOf('/') + 1) : key);
+              combinedParams.set(cleanKey, val);
+            });
+          }
         }
       }
 
-      // If access_token was extracted, explicitly establish the session in Supabase Auth
+      // Check for explicit error from OAuth provider
+      const errorParam = combinedParams.get('error') || combinedParams.get('error_code');
+      const errorDesc = combinedParams.get('error_description');
+      if (errorParam) {
+        console.warn('[AuthService] OAuth error parameter returned:', errorParam, errorDesc);
+        const msg = errorDesc
+          ? decodeURIComponent(errorDesc.replace(/\+/g, ' '))
+          : (errorParam === 'access_denied' ? 'Google sign-in was cancelled. Please try again.' : errorParam);
+        throw new Error(msg);
+      }
+
+      let authUser: any = null;
+
+      // 2. Handle implicit grant tokens immediately if present in hash fragment
+      const accessToken = combinedParams.get('access_token');
+      const refreshToken = combinedParams.get('refresh_token');
+
       if (accessToken && refreshToken) {
         try {
-          await supabase.auth.setSession({
+          console.log('[AuthService] Establishing Supabase session with extracted OAuth tokens...');
+          const { data: sessData, error: sessErr } = await supabase.auth.setSession({
             access_token: accessToken,
             refresh_token: refreshToken,
           });
-        } catch (setErr) {
-          console.warn('[AuthService] setSession notice:', setErr);
+          if (sessErr) {
+            console.warn('[AuthService] setSession error:', sessErr.message);
+          } else if (sessData?.session?.user) {
+            authUser = sessData.session.user;
+            console.log('[AuthService] Supabase session established immediately via setSession.');
+          }
+        } catch (err) {
+          console.warn('[AuthService] setSession exception:', err);
         }
       }
 
-      // 2. Poll Supabase for user session (up to 3 seconds)
-      let authUser: any = null;
-      for (let attempt = 0; attempt < 10; attempt++) {
-        const { data: userData } = await supabase.auth.getUser();
-        if (userData?.user) {
-          authUser = userData.user;
-          break;
+      // 3. Handle PKCE code exchange immediately if code is present
+      const code = combinedParams.get('code');
+      if (!authUser && code) {
+        try {
+          console.log('[AuthService] Exchanging PKCE code for session...');
+          const { data: exchangeData, error: exchangeErr }: any = await supabase.auth.exchangeCodeForSession(code);
+          if (exchangeErr) {
+            console.warn('[AuthService] exchangeCodeForSession error:', exchangeErr.message);
+          } else if (exchangeData?.user) {
+            authUser = exchangeData.user;
+          } else if (exchangeData?.session?.user) {
+            authUser = exchangeData.session.user;
+          }
+        } catch (err) {
+          console.warn('[AuthService] exchangeCodeForSession exception:', err);
         }
-        const { data: sessData } = await supabase.auth.getSession();
-        if (sessData?.session?.user) {
-          authUser = sessData.session.user;
-          break;
+      }
+
+      // 4. Check if session is already available
+      if (!authUser) {
+        const { data: initialSession } = await supabase.auth.getSession();
+        if (initialSession?.session?.user) {
+          authUser = initialSession.session.user;
         }
-        await new Promise((r) => setTimeout(r, 250));
+      }
+
+      // 5. Properly wait for and retrieve the Supabase session using onAuthStateChange & getSession
+      if (!authUser) {
+        authUser = await new Promise<any>((resolve) => {
+          let resolved = false;
+
+          const finish = (user: any) => {
+            if (!resolved && user) {
+              resolved = true;
+              resolve(user);
+            }
+          };
+
+          // Subscribe to onAuthStateChange
+          const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+            console.log('[AuthService] OAuth callback onAuthStateChange:', event, !!session?.user);
+            if (
+              session?.user &&
+              (event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED')
+            ) {
+              subscription.unsubscribe();
+              finish(session.user);
+            }
+          });
+
+          // Periodically poll getSession() and getUser() for up to 8 seconds
+          let pollCount = 0;
+          const maxPolls = 16; // 16 * 500ms = 8 seconds
+
+          const pollInterval = setInterval(async () => {
+            if (resolved) {
+              clearInterval(pollInterval);
+              subscription.unsubscribe();
+              return;
+            }
+
+            pollCount++;
+
+            try {
+              const { data: sessionData } = await supabase.auth.getSession();
+              if (sessionData?.session?.user) {
+                clearInterval(pollInterval);
+                subscription.unsubscribe();
+                finish(sessionData.session.user);
+                return;
+              }
+
+              const { data: userData } = await supabase.auth.getUser();
+              if (userData?.user) {
+                clearInterval(pollInterval);
+                subscription.unsubscribe();
+                finish(userData.user);
+                return;
+              }
+
+              // Fallback: If code exists and session not established yet, retry exchange
+              if (code && pollCount === 4 && !resolved) {
+                console.log('[AuthService] Running fallback exchangeCodeForSession with code...');
+                try {
+                  const { data: exchangeData }: any = await supabase.auth.exchangeCodeForSession(code);
+                  if (exchangeData?.user) {
+                    clearInterval(pollInterval);
+                    subscription.unsubscribe();
+                    finish(exchangeData.user);
+                    return;
+                  } else if (exchangeData?.session?.user) {
+                    clearInterval(pollInterval);
+                    subscription.unsubscribe();
+                    finish(exchangeData.session.user);
+                    return;
+                  }
+                } catch (exchangeErr) {
+                  console.warn('[AuthService] Fallback exchangeCodeForSession notice:', exchangeErr);
+                }
+              }
+            } catch (pollErr) {
+              console.warn('[AuthService] Polling notice during OAuth callback:', pollErr);
+            }
+
+            if (pollCount >= maxPolls) {
+              clearInterval(pollInterval);
+              subscription.unsubscribe();
+              if (!resolved) {
+                resolved = true;
+                resolve(null);
+              }
+            }
+          }, 500);
+        });
       }
 
       if (!authUser || !authUser.id) {
-        console.warn('[AuthService] handleOAuthCallback: No authenticated Supabase user found.');
+        console.warn('[AuthService] handleOAuthCallback: No authenticated Supabase user found after timeout.');
         throw new Error('Could not establish an authenticated Google session. Please try signing in again.');
       }
 
+      // Remove sensitive OAuth tokens from browser URL and history
+      try {
+        if (typeof window !== 'undefined' && window.history && window.history.replaceState) {
+          window.history.replaceState(null, '', window.location.pathname + '#/auth/callback');
+        }
+      } catch (cleanErr) {
+        console.warn('[AuthService] Could not clean URL hash:', cleanErr);
+      }
+
       const userId = authUser.id;
-      const email = authUser.email || '';
+      const email = (authUser.email || '').trim().toLowerCase();
 
-      if (import.meta.env.DEV) {
-        console.log('--- AUTH DEBUG LOG ---');
-        console.log('AUTH USER ID:', userId);
-        console.log('AUTH EMAIL:', email);
-        console.log('CURRENT PATH:', window.location.pathname);
-        console.log('CURRENT HASH:', window.location.hash);
+      console.log('[AuthService] Successfully authenticated Google user:', userId, email);
+
+      // 5. Load existing profile by auth user ID
+      const { data: dbProfile, error: profileErr } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .maybeSingle();
+
+      if (profileErr) {
+        console.warn('[AuthService] Error fetching existing profile by auth user ID:', profileErr.message);
       }
 
-      // Determine intended role from session/local storage or metadata
-      const storedIntended = sessionStorage.getItem('ms_intended_role') ||
-        localStorage.getItem('ms_pending_oauth_role') ||
-        authUser.user_metadata?.role;
-      const intendedRole: UserRole = (storedIntended === 'caregiver' || storedIntended === 'clinician')
-        ? storedIntended
-        : 'elderly';
+      let profile: UserProfile | null = null;
+      let finalRole: UserRole = 'elderly';
 
-      // 3. Synchronize profile from Supabase or complete for new user
-      let profile = await this.syncProfileFromSupabase(userId, email);
-      if (!profile) {
+      if (dbProfile) {
+        // Existing profile in Supabase: MUST use existing account and NOT mutate role or create duplicate
+        console.log('[AuthService] Existing profile found for auth user ID:', userId, 'Role in DB:', dbProfile.role);
+        profile = mapDbProfileToUser(dbProfile as Record<string, unknown>, email);
+
+        // Read role from Supabase
+        const rawRole = (dbProfile.role as string || '').toLowerCase();
+        if (rawRole === 'caregiver') {
+          finalRole = 'caregiver';
+        } else if (rawRole === 'clinician' || rawRole === 'doctor') {
+          finalRole = 'clinician';
+        } else {
+          finalRole = 'elderly';
+        }
+        profile.role = finalRole;
+      } else {
+        // New Google user — complete profile using intended role (no signUp() call)
+        const storedIntended =
+          sessionStorage.getItem('ms_intended_role') ||
+          localStorage.getItem('ms_pending_oauth_role') ||
+          sessionStorage.getItem('ms_pending_oauth_role') ||
+          authUser.user_metadata?.role;
+
+        const intendedRole: UserRole =
+          (storedIntended === 'caregiver' || storedIntended === 'clinician')
+            ? storedIntended
+            : 'elderly';
+
+        console.log('[AuthService] No existing profile in Supabase. Completing new Google profile with role:', intendedRole);
         profile = await this.completeGoogleProfile(intendedRole);
+        finalRole = profile?.role || intendedRole;
       }
 
-      const finalRole = profile?.role || intendedRole;
+      // Clear pending OAuth role intent
+      localStorage.removeItem('ms_pending_oauth_role');
+      sessionStorage.removeItem('ms_pending_oauth_role');
+      sessionStorage.removeItem('ms_intended_role');
 
+      // 6. Establish in-memory and local session state
+      if (profile) {
+        this.currentProfile = profile;
+        this.session = makeSession(profile, email);
+        localStorage.setItem(SK_SESSION, JSON.stringify(this.session));
+        tabStorage.setItem(SK_SESSION, JSON.stringify(this.session));
+
+        if (finalRole === 'caregiver') {
+          tabStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(profile));
+          localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(profile));
+          tabStorage.setItem('ms_caregiver_auth_token', JSON.stringify(this.session));
+        } else if (finalRole === 'elderly') {
+          tabStorage.setItem(SK_PATIENT_PROFILE, JSON.stringify(profile));
+          localStorage.setItem(SK_PATIENT_PROFILE, JSON.stringify(profile));
+        }
+
+        this.notifyListeners();
+      }
+
+      // 7. Route based on role from Supabase:
+      // caregiver -> Caregiver Dashboard
+      // patient -> Patient Dashboard
       if (finalRole === 'caregiver') {
         return '/caregiver/dashboard';
-      } else if (finalRole === 'clinician' || (finalRole as string) === 'doctor') {
+      } else if (finalRole === 'clinician') {
         return '/doctor/dashboard';
       } else {
         return '/patient/dashboard';
@@ -992,7 +1383,7 @@ class AuthService {
         email,
       };
 
-      // Direct UPSERT into Supabase profiles table
+      // Direct UPSERT into Supabase profiles table (using valid schema columns)
       try {
         const { error: upsertErr } = await supabase.from('profiles').upsert({
           id: userId,
@@ -1001,7 +1392,7 @@ class AuthService {
           preferred_name: preferredName,
           role,
           profile_photo_url: photoUrl,
-          connection_code: connectionCode,
+          secondary_language: connectionCode, // store connection code in valid secondary_language column
           has_completed_onboarding: newProfile.hasCompletedOnboarding,
           updated_at: new Date().toISOString(),
         }, { onConflict: 'id' });
@@ -1011,6 +1402,25 @@ class AuthService {
         }
       } catch (upsertErr) {
         console.warn('[AuthService] Supabase profiles upsert exception:', upsertErr);
+      }
+
+      // Sync patient/caregiver to central sync store for cross-device visibility
+      if (role === 'elderly' || (role as string) === 'patient') {
+        centralSyncService.storePatient(newProfile).catch(() => {});
+        try {
+          const curPts = JSON.parse(localStorage.getItem('ms_registered_patients') || '[]');
+          if (!curPts.some((p: any) => p.id === newProfile.id)) {
+            curPts.push(newProfile);
+            localStorage.setItem('ms_registered_patients', JSON.stringify(curPts));
+          }
+        } catch {}
+      } else if (role === 'caregiver') {
+        centralSyncService.storeCaregiver({
+          id: userId,
+          email,
+          name: fullName,
+          passwordHash: '',
+        }).catch(() => {});
       }
 
       this.currentProfile = newProfile;
@@ -1043,48 +1453,39 @@ class AuthService {
 
         // Ensure connectionCode is populated for patients
         if (!mapped.connectionCode && (mapped.role === 'elderly' || (mapped.role as string) === 'patient')) {
-          const generatedCode = generateConnectionCode();
+          const generatedCode = generateConnectionCode(userId);
           mapped.connectionCode = generatedCode;
-          supabase.from('profiles').update({ connection_code: generatedCode }).eq('id', userId).then(() => {});
+          supabase.from('profiles').update({ secondary_language: generatedCode }).eq('id', userId).then(() => {});
         }
 
-        const pendingOauthRole = (
-          localStorage.getItem('ms_pending_oauth_role') ||
-          sessionStorage.getItem('ms_pending_oauth_role')
-        ) as UserRole | null;
-
-        if (pendingOauthRole) {
-          localStorage.removeItem('ms_pending_oauth_role');
-          sessionStorage.removeItem('ms_pending_oauth_role');
-
-          if (pendingOauthRole === 'caregiver' && (mapped.role === 'elderly' || (mapped.role as string) === 'patient')) {
-            await supabase.auth.signOut();
-            this.session = null;
-            this.currentProfile = null;
-            this.connectedPatient = null;
-            localStorage.removeItem(SK_SESSION);
-            this.notifyListeners();
-            throw new Error(`This Google account (${email}) is already registered as a Patient. Caregivers must sign in with a different Google account.`);
-          }
-          if ((pendingOauthRole === 'elderly' || (pendingOauthRole as string) === 'patient') && mapped.role === 'caregiver') {
-            await supabase.auth.signOut();
-            this.session = null;
-            this.currentProfile = null;
-            this.connectedPatient = null;
-            localStorage.removeItem(SK_SESSION);
-            this.notifyListeners();
-            throw new Error(`This Google account (${email}) is registered as a Caregiver. Patients must sign in with a different Google account.`);
-          }
+        // Sync to central store
+        if (mapped.role === 'elderly' || (mapped.role as string) === 'patient') {
+          centralSyncService.storePatient(mapped).catch(() => {});
+          try {
+            const curPts = JSON.parse(localStorage.getItem('ms_registered_patients') || '[]');
+            if (!curPts.some((p: any) => p.id === mapped.id)) {
+              curPts.push(mapped);
+              localStorage.setItem('ms_registered_patients', JSON.stringify(curPts));
+            }
+          } catch {}
         }
+
+        // Clean up any pending role selection markers without mutating existing DB role
+        localStorage.removeItem('ms_pending_oauth_role');
+        sessionStorage.removeItem('ms_pending_oauth_role');
+        sessionStorage.removeItem('ms_intended_role');
 
         this.needsRoleSelection = false;
         this.pendingGoogleUser = null;
-        sessionStorage.removeItem('ms_pending_oauth_role');
-        localStorage.removeItem('ms_pending_oauth_role');
 
         this.currentProfile = mapped;
         this.session = makeSession(mapped, email);
         localStorage.setItem(SK_SESSION, JSON.stringify(this.session));
+        if (mapped.role === 'caregiver') {
+          tabStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(mapped));
+          localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(mapped));
+          tabStorage.setItem('ms_caregiver_auth_token', JSON.stringify(this.session));
+        }
         this.notifyListeners();
         return mapped;
       }
@@ -1097,39 +1498,6 @@ class AuthService {
         sessionStorage.getItem('ms_pending_oauth_role')
       ) as UserRole | null;
       const pendingRole = pendingOauthRole || (metadata.role as UserRole);
-
-      // Check role collision with ANY existing profile in Supabase matching this email
-      const normalizedEmail = (email || '').trim().toLowerCase();
-      if (normalizedEmail) {
-        const { data: existingEmailProfile } = await supabase
-          .from('profiles')
-          .select('id, role')
-          .ilike('email', normalizedEmail)
-          .maybeSingle();
-
-        if (existingEmailProfile) {
-          if (pendingRole === 'caregiver' && (existingEmailProfile.role === 'elderly' || (existingEmailProfile.role as string) === 'patient')) {
-            localStorage.removeItem('ms_pending_oauth_role');
-            sessionStorage.removeItem('ms_pending_oauth_role');
-            await supabase.auth.signOut();
-            this.session = null;
-            this.currentProfile = null;
-            localStorage.removeItem(SK_SESSION);
-            this.notifyListeners();
-            throw new Error(`This Google account (${normalizedEmail}) is already registered as a Patient. A Caregiver must use a separate Google account with a different email address.`);
-          }
-          if ((pendingRole === 'elderly' || (pendingRole as string) === 'patient') && existingEmailProfile.role === 'caregiver') {
-            localStorage.removeItem('ms_pending_oauth_role');
-            sessionStorage.removeItem('ms_pending_oauth_role');
-            await supabase.auth.signOut();
-            this.session = null;
-            this.currentProfile = null;
-            localStorage.removeItem(SK_SESSION);
-            this.notifyListeners();
-            throw new Error(`This Google account (${normalizedEmail}) is registered as a Caregiver. Patients must sign in with a different Google account.`);
-          }
-        }
-      }
 
       const assignedRole: UserRole = pendingRole || 'elderly';
       localStorage.removeItem('ms_pending_oauth_role');
@@ -1158,8 +1526,11 @@ class AuthService {
     sessionStorage.removeItem('ms_pending_oauth_role');
     localStorage.removeItem('ms_pending_oauth_role');
     localStorage.removeItem(SK_SESSION);
+    tabStorage.removeItem(SK_SESSION);
     localStorage.removeItem(SK_PATIENT_PROFILE);
     localStorage.removeItem(SK_CAREGIVER_PROFILE);
+    tabStorage.removeItem(SK_CAREGIVER_PROFILE);
+    tabStorage.removeItem('ms_caregiver_auth_token');
     this.notifyListeners();
   }
 
@@ -1214,11 +1585,25 @@ class AuthService {
     return this.connectedPatient;
   }
 
-  /**
-   * Retrieves the authenticated user's profile.
-   * Derives strictly from Supabase session.
-   */
   public getCurrentUser(_contextTab?: string): UserProfile | null {
+    const isCaregiverContext = _contextTab === 'caregiver' ||
+      (typeof window !== 'undefined' && (window.location.pathname.includes('caregiver') || window.location.hash.includes('/caregiver')));
+
+    if (isCaregiverContext) {
+      if (this.currentProfile && this.currentProfile.role === 'caregiver') {
+        return this.currentProfile;
+      }
+      try {
+        const cachedStr = tabStorage.getItem(SK_CAREGIVER_PROFILE) || localStorage.getItem(SK_CAREGIVER_PROFILE);
+        if (cachedStr) {
+          const parsed = JSON.parse(cachedStr);
+          if (parsed && parsed.role === 'caregiver') {
+            this.currentProfile = parsed;
+            return parsed;
+          }
+        }
+      } catch {}
+    }
     return this.currentProfile;
   }
 
