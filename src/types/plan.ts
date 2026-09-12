@@ -1,4 +1,13 @@
-import { GameId } from './game';
+import { GameId, DifficultyTier } from './game';
+
+export type DayOfWeek =
+  | 'Monday'
+  | 'Tuesday'
+  | 'Wednesday'
+  | 'Thursday'
+  | 'Friday'
+  | 'Saturday'
+  | 'Sunday';
 
 export type TaskType = 
   | 'cognitive_game' 
@@ -40,9 +49,16 @@ export interface DailyActivityTask {
 export interface DailyPlan {
   id: string;
   userId: string;
-  date: string; // "YYYY-MM-DD"
+  date: string; // "YYYY-MM-DD" local calendar date
+  dayOfWeek: DayOfWeek;
+  focusArea: string;
+  difficulty: DifficultyTier;
+  estimatedDuration: number;
+  aiReason?: string;
+  recommendedGames: GameId[];
   tasks: DailyActivityTask[];
   totalXpPossible: number;
   earnedXpToday: number;
   isAllCompleted: boolean;
+  source?: 'gemini' | 'rule_adaptive' | 'baseline';
 }

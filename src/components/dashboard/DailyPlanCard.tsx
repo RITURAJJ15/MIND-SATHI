@@ -1,16 +1,39 @@
 import React, { useState, useEffect } from 'react';
-import { DailyActivityTask, DailyPlan } from '../../types/plan';
+import { DailyActivityTask, DailyPlan, DayOfWeek } from '../../types/plan';
 import { dailyPlanService } from '../../services/dailyPlanService';
 import { useCurrentUser } from '../../hooks/useCurrentUser';
 import { useLanguage } from '../../hooks/useLanguage';
-import { useSpeech } from '../../hooks/useSpeech';
 import { VoicePromptButton } from '../common/VoicePromptButton';
-import { CheckCircle2, Circle, Play, Award, Sparkles, Heart, Droplet, BookOpen, PhoneCall } from 'lucide-react';
+import {
+  CheckCircle2,
+  Circle,
+  Play,
+  Sparkles,
+  Heart,
+  Droplet,
+  BookOpen,
+  PhoneCall,
+  Calendar,
+  Clock,
+  Zap,
+  Activity,
+  Award,
+} from 'lucide-react';
 
 interface DailyPlanCardProps {
   onPlayGame?: (gameId: string) => void;
   onOpenMemories?: () => void;
 }
+
+const DAY_LABELS: Record<DayOfWeek, { hi: string; as: string }> = {
+  Monday: { hi: 'सोमवार', as: 'সোমবাৰ' },
+  Tuesday: { hi: 'मंगलवार', as: 'মঙলবাৰ' },
+  Wednesday: { hi: 'बुधवार', as: 'বুধবাৰ' },
+  Thursday: { hi: 'गुरुवार', as: 'বৃহস্পতিবাৰ' },
+  Friday: { hi: 'शुक्रवार', as: 'শুক্ৰবাৰ' },
+  Saturday: { hi: 'शनिवार', as: 'শনিবাৰ' },
+  Sunday: { hi: 'रविवार', as: 'দেওবাৰ' },
+};
 
 export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({ onPlayGame, onOpenMemories }) => {
   const { currentUser } = useCurrentUser();
@@ -20,15 +43,15 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({ onPlayGame, onOpen
   const [plan, setPlan] = useState<DailyPlan>(() => dailyPlanService.getDailyPlan(userId));
 
   useEffect(() => {
-    // Initial load
+    // Initial load from synchronous cache
     setPlan(dailyPlanService.getDailyPlan(userId));
 
-    // Sync from Supabase DB for real user
+    // Sync & personalize from Supabase DB for real user
     dailyPlanService.syncDailyPlanFromDb(userId).then((synced) => {
       setPlan(synced);
     });
 
-    // Real-time listener for updates (e.g. from game completions or other tabs)
+    // Real-time listener for updates (e.g. from game completions or date rollover)
     const unsubscribe = dailyPlanService.subscribe((updated) => {
       if (updated.userId === userId) {
         setPlan(updated);
@@ -43,7 +66,7 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({ onPlayGame, onOpen
   };
 
   const completedTasks = plan.tasks.filter((t) => t.completed).length;
-  const progressPercent = Math.round((completedTasks / plan.tasks.length) * 100);
+  const progressPercent = plan.tasks.length > 0 ? Math.round((completedTasks / plan.tasks.length) * 100) : 0;
 
   const renderIcon = (type: string) => {
     switch (type) {
@@ -55,42 +78,101 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({ onPlayGame, onOpen
         return <Heart className="w-5 h-5 text-rose-500" />;
       case 'family_call':
         return <PhoneCall className="w-5 h-5 text-emerald-600" />;
+      case 'gentle_stretch':
+        return <Activity className="w-5 h-5 text-indigo-600" />;
       default:
         return <BookOpen className="w-5 h-5 text-teal-600" />;
     }
   };
 
-  const planNarration = currentLang === 'hi'
-    ? `आज की दिनचर्या में ${plan.tasks.length} में से ${completedTasks} कार्य पूरे हो चुके हैं। कुल ${plan.earnedXpToday} साथी अंक प्राप्त हुए।`
+  const dayNameLocalized = currentLang === 'hi'
+    ? DAY_LABELS[plan.dayOfWeek]?.hi || plan.dayOfWeek
     : currentLang === 'as'
-    ? `আজিৰ দিনলিপিত ${plan.tasks.length} টাৰ ভিতৰত ${completedTasks} টা কাম সম্পূৰ্ণ হ\'ল।`
-    : `Today's plan has ${completedTasks} of ${plan.tasks.length} tasks completed, with ${plan.earnedXpToday} XP earned.`;
+    ? DAY_LABELS[plan.dayOfWeek]?.as || plan.dayOfWeek
+    : plan.dayOfWeek;
+
+  const difficultyLabel = plan.difficulty === 'saral'
+    ? (currentLang === 'hi' ? 'सरल (Gentle)' : currentLang === 'as' ? 'সহজ (Gentle)' : 'Saral (Gentle)')
+    : plan.difficulty === 'madhyam'
+    ? (currentLang === 'hi' ? 'मध्यम (Balanced)' : currentLang === 'as' ? 'মধ্যম (Balanced)' : 'Madhyam (Balanced)')
+    : (currentLang === 'hi' ? 'निपुण (Advanced)' : currentLang === 'as' ? 'নিপুণ (Advanced)' : 'Nipun (Advanced)');
+
+  const planNarration = currentLang === 'hi'
+    ? `आज ${dayNameLocalized} की दिनचर्या में ${plan.tasks.length} में से ${completedTasks} कार्य पूरे हो चुके हैं। फोकस क्षेत्र है: ${plan.focusArea}। कुल ${plan.earnedXpToday} साथी अंक प्राप्त हुए।`
+    : currentLang === 'as'
+    ? `আজি ${dayNameLocalized}ৰ দিনলিপিত ${plan.tasks.length} টাৰ ভিতৰত ${completedTasks} টা কাম সম্পূৰ্ণ হ\'ল। মুঠ ${plan.earnedXpToday} পইণ্ট পোৱা গ\'ল।`
+    : `Today is ${plan.dayOfWeek}. ${completedTasks} of ${plan.tasks.length} tasks completed with focus on ${plan.focusArea}. ${plan.earnedXpToday} XP earned.`;
 
   return (
-    <div className="bg-white p-6 sm:p-7 rounded-3xl shadow-elder border border-gray-200">
-      {/* Header */}
-      <div className="flex items-center justify-between gap-4 mb-4">
+    <div className="bg-white p-6 sm:p-7 rounded-3xl shadow-elder border border-gray-200 text-left">
+      {/* 7-DAY ROTATING HEADER */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-3 border-b border-gray-100">
         <div>
-          <div className="flex items-center gap-2">
-            <h3 className="text-xl sm:text-2xl font-extrabold text-gray-900">
-              {currentLang === 'hi' ? 'आज की दिनचर्या (Daily Plan)' : currentLang === 'as' ? 'আজিৰ দিনলিপি (Daily Plan)' : 'Today’s Personalized Activity Plan'}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-emerald-100 text-emerald-900 border border-emerald-300 shadow-xs">
+              <Calendar className="w-3.5 h-3.5 text-emerald-700" />
+              <span>{dayNameLocalized}</span>
+            </span>
+
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-purple-800 border border-purple-200">
+              <Zap className="w-3 h-3 text-purple-600" />
+              <span>{difficultyLabel}</span>
+            </span>
+
+            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
+              <Clock className="w-3 h-3 text-blue-600" />
+              <span>~{plan.estimatedDuration} min</span>
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 mt-2">
+            <h3 className="text-xl sm:text-2xl font-black text-gray-900">
+              {currentLang === 'hi' ? 'आज की वैयक्तिक दिनचर्या' : currentLang === 'as' ? 'আজিৰ ব্যক্তিগত দিনলিপি' : 'Today’s Personalized Daily Plan'}
             </h3>
             <VoicePromptButton text={planNarration} size="sm" />
           </div>
-          <p className="text-gray-500 text-sm mt-0.5">
-            {currentLang === 'hi' ? 'संतुलित मानसिक व शारीरिक स्वास्थ्य के दैनिक कदम' : currentLang === 'as' ? 'স্বাস্থ্য আৰু মানসিক সতেজতাৰ দৈনিক অভ্যাস' : 'Balanced daily steps for cognitive vitality and social connection'}
+
+          <p className="text-gray-600 text-xs sm:text-sm font-semibold mt-0.5 flex items-center gap-1.5">
+            <span className="text-sathi-600">🎯</span>
+            <span>{plan.focusArea}</span>
           </p>
         </div>
 
-        <div className="text-right shrink-0">
-          <span className="text-xs font-bold uppercase text-amber-800 bg-amber-100 px-3 py-1 rounded-full border border-amber-300">
-            +{plan.earnedXpToday} / {plan.totalXpPossible} XP
+        <div className="text-right shrink-0 self-start sm:self-auto">
+          <span className="text-xs font-black uppercase text-amber-900 bg-amber-100 px-3.5 py-1.5 rounded-2xl border border-amber-300 shadow-xs inline-flex items-center gap-1.5">
+            <Award className="w-4 h-4 text-amber-700" />
+            <span>+{plan.earnedXpToday} / {plan.totalXpPossible} XP</span>
           </span>
         </div>
       </div>
 
-      {/* Progress Bar */}
-      <div className="mb-6">
+      {/* AI PERSONALIZATION NOTE BOX */}
+      {plan.aiReason && (
+        <div className="mb-5 p-3.5 rounded-2xl bg-gradient-to-r from-purple-50 via-indigo-50/50 to-white border border-purple-200/80 shadow-xs flex items-start justify-between gap-3">
+          <div className="flex items-start gap-2.5 min-w-0">
+            <div className="p-1.5 rounded-xl bg-purple-100 text-purple-700 shrink-0 mt-0.5">
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div>
+              <div className="text-[11px] font-extrabold uppercase tracking-wider text-purple-900 flex items-center gap-1.5">
+                <span>Adaptive Recommendation</span>
+                {plan.source === 'gemini' && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-purple-200/80 text-purple-900">
+                    Gemini AI
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-purple-950 font-medium leading-relaxed mt-0.5">
+                "{plan.aiReason}"
+              </p>
+            </div>
+          </div>
+          <VoicePromptButton text={plan.aiReason} size="sm" />
+        </div>
+      )}
+
+      {/* PROGRESS BAR */}
+      <div className="mb-5">
         <div className="flex justify-between text-xs font-bold text-gray-600 mb-1.5">
           <span>{progressPercent}% {t.common.completed}</span>
           <span>{completedTasks} / {plan.tasks.length} {currentLang === 'hi' ? 'कार्य' : currentLang === 'as' ? 'কাম' : 'tasks'}</span>
@@ -103,7 +185,7 @@ export const DailyPlanCard: React.FC<DailyPlanCardProps> = ({ onPlayGame, onOpen
         </div>
       </div>
 
-      {/* Task List */}
+      {/* TASK LIST */}
       <div className="space-y-3">
         {plan.tasks.map((task) => {
           const taskTitle = task.title[currentLang] || task.title.en;

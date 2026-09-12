@@ -180,6 +180,85 @@ Provide personalized game recommendation and difficulty in valid JSON only.`;
     }
   }
 
+  // 1.1 7-Day Personalized Daily Plan
+  if (url === '/api/gemini/plan-personalize') {
+    try {
+      const {
+        dayOfWeek = 'Monday',
+        planDate,
+        baselineFocus = 'Memory Focus',
+        baselineGames = ['family_memory', 'smriti_sangam'],
+        sessions = [],
+        performanceSummary,
+        userName = 'Elderly User',
+        language = 'en',
+      } = body;
+
+      const systemPrompt = `You are the MIND SATHI Cognitive Personalization AI for elderly cognitive wellness in India.
+Your role is to personalize today's daily cognitive activity plan based on the 7-day weekly rotation schedule and the patient's actual recent game performance.
+
+WEEKLY 7-DAY ROTATING STRUCTURE:
+- Monday: Memory Focus (domain: memory, family recognition, recall)
+- Tuesday: Attention & Focus (domain: attention, visual matching, concentration)
+- Wednesday: Language & Verbal (domain: language, word recall, verbal memory)
+- Thursday: Problem Solving & Logic (domain: executive, everyday math, pattern reasoning)
+- Friday: Family & Social Connection (domain: family_reminiscence, audio/photo recall)
+- Saturday: Mixed Cognitive Challenge (multi-domain cognitive workout)
+- Sunday: Light Cognitive Review & Relaxation (gentle review, nature & calm stimulation)
+
+PERSONALIZATION RULES:
+1. Do NOT diagnose dementia or any disease. Keep all reasoning encouraging, warm, respectful, and clinically constructive.
+2. Adapt difficulty based on recent performance:
+   - Low accuracy (<70%) or high mistakes -> Recommend 'saral' (gentle/easy) with reinforcement.
+   - Good accuracy (70-85%) -> Recommend 'madhyam' (moderate/balanced).
+   - High accuracy (>85%) -> Recommend 'nipun' (advanced challenge).
+3. Select 2-3 games fitting today's domain from valid game IDs:
+   'smriti_sangam', 'shabda_mala', 'rangoli_rekha', 'bazaar_hisaab', 'dhyan_kendra', 'disha_sathi',
+   'sequence_memory', 'object_recognition', 'word_recall', 'number_pattern', 'daily_challenge',
+   'family_memory', 'ne_states_memory', 'guess_the_place', 'culture_match', 'food_memory', 'nature_memory', 'festival_memory'.
+4. Output ONLY valid JSON matching this schema:
+{
+  "day": "${dayOfWeek}",
+  "focusArea": "Today's specific focus area name",
+  "difficulty": "saral",
+  "estimatedDuration": 15,
+  "recommendedGames": ["gameId1", "gameId2"],
+  "reason": "1-2 sentence warm, encouraging explanation for the elder explaining why these activities were chosen today based on their recent performance in ${language}."
+}`;
+
+      const userPrompt = `Patient: ${userName}
+Local Date: ${planDate}
+Day of Week: ${dayOfWeek}
+Baseline Focus: ${baselineFocus}
+Baseline Recommended Games: ${JSON.stringify(baselineGames)}
+Recent Performance Metrics:
+${JSON.stringify(performanceSummary || { sessionsCount: sessions.length })}
+Recent Sessions Sample:
+${JSON.stringify(sessions.slice(0, 8))}
+Target Language: ${language}
+
+Provide the personalized plan in raw JSON only.`;
+
+      const rawResponse = await callGeminiGenerate(apiKey, [{ parts: [{ text: userPrompt }] }], systemPrompt);
+      const parsed = extractJson(rawResponse);
+      sendJson(res, 200, parsed);
+      return true;
+    } catch (err: any) {
+      console.warn('[Gemini Proxy Plan Personalize Fallback]:', err.message);
+      sendJson(res, 200, {
+        day: body.dayOfWeek || 'Monday',
+        focusArea: body.baselineFocus || 'Memory Focus',
+        difficulty: 'saral',
+        estimatedDuration: 15,
+        recommendedGames: body.baselineGames || ['family_memory', 'smriti_sangam'],
+        reason: body.language === 'hi'
+          ? 'आज की दिनचर्या आपकी स्मृति और मानसिक सजगता को प्रोत्साहित करने के लिए तैयार की गई है।'
+          : "Today's activities are tailored to support your cognitive vitality and daily routine.",
+      });
+      return true;
+    }
+  }
+
   // 2. AI Sathi Memory Assistant
   if (url === '/api/gemini/assistant') {
     try {

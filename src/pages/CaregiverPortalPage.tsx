@@ -6,6 +6,7 @@ import { authService } from '../services/authService';
 import { geminiService, CaregiverAIInsightResult } from '../services/geminiService';
 import { gameService } from '../services/gameService';
 import { dailyPlanService } from '../services/dailyPlanService';
+import { DailyPlan } from '../types/plan';
 import { familyService } from '../services/familyService';
 import { FamilyMember } from '../types/family';
 import {
@@ -41,6 +42,7 @@ import {
   Gamepad2,
   MapPin,
   Radio,
+  Zap,
 } from 'lucide-react';
 import { GoogleSignInButton } from '../components/common/GoogleSignInButton';
 import { CaregiverLiveLocationModal } from '../components/location/CaregiverLiveLocationModal';
@@ -147,6 +149,8 @@ export const CaregiverPortalPage: React.FC = () => {
   const [isLoadingPatients, setIsLoadingPatients] = useState<boolean>(true);
   const [patientGameSessions, setPatientGameSessions] = useState<any[]>([]);
 
+  const [patientDailyPlan, setPatientDailyPlan] = useState<DailyPlan | null>(null);
+
   // Gemini Caregiver AI Insights state
   const [aiInsight, setAiInsight] = useState<CaregiverAIInsightResult | null>(null);
   const [isGeneratingAi, setIsGeneratingAi] = useState<boolean>(false);
@@ -173,7 +177,8 @@ export const CaregiverPortalPage: React.FC = () => {
           return primary;
         });
 
-        // Load patient family members & latest game sessions from Supabase silently
+        // Load patient daily plan, family members & latest game sessions from Supabase silently
+        dailyPlanService.getPatientDailyPlan(primary.id).then((plan) => setPatientDailyPlan(plan));
         familyService.syncFamilyMembersFromDb(primary.id).then((f) => setPatientFamily(f));
         gameService.syncSessionsFromDb(primary.id).then(() => {
           const sessions = gameService.getSessionsForUser(primary.id);
@@ -188,6 +193,7 @@ export const CaregiverPortalPage: React.FC = () => {
       } else {
         setAssignedPatients((prev: any[]) => (prev.length === 0 ? prev : []));
         setSelectedPatient((prev: any) => (prev === null ? prev : null));
+        setPatientDailyPlan(null);
         setPatientGameSessions((prev: any[]) => (prev.length === 0 ? prev : []));
         lastAiPatientId.current = null;
         // Load available patients to help user link
@@ -1017,6 +1023,90 @@ export const CaregiverPortalPage: React.FC = () => {
           </p>
         </div>
       </div>
+
+      {/* 7-DAY ROTATING DAILY PLAN & SENIOR ROUTINE CARD */}
+      {patientDailyPlan && (
+        <div className="bg-white p-6 sm:p-7 rounded-3xl shadow-elder border border-emerald-200 text-left">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4 pb-3 border-b border-gray-100">
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-emerald-100 text-emerald-900 border border-emerald-300">
+                  <CalendarCheck className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>{patientDailyPlan.dayOfWeek} Routine</span>
+                </span>
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-purple-50 text-purple-800 border border-purple-200">
+                  <Zap className="w-3 h-3 text-purple-600" />
+                  <span className="capitalize">{patientDailyPlan.difficulty} Tier</span>
+                </span>
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-blue-50 text-blue-800 border border-blue-200">
+                  <Clock className="w-3 h-3 text-blue-600" />
+                  <span>~{patientDailyPlan.estimatedDuration} min</span>
+                </span>
+              </div>
+              <h3 className="text-xl font-extrabold text-gray-900 mt-2">
+                {selectedPatient.full_name}'s Today's Personalized Activity Plan
+              </h3>
+              <p className="text-xs sm:text-sm text-gray-600 font-semibold mt-0.5">
+                🎯 Focus Domain: {patientDailyPlan.focusArea}
+              </p>
+            </div>
+
+            <div className="text-right shrink-0 self-start sm:self-auto">
+              <span className="text-xs font-black uppercase text-amber-900 bg-amber-100 px-3.5 py-1.5 rounded-2xl border border-amber-300 shadow-xs inline-flex items-center gap-1.5">
+                <Award className="w-4 h-4 text-amber-700" />
+                <span>
+                  {patientDailyPlan.tasks.filter((t) => t.completed).length} / {patientDailyPlan.tasks.length} Completed
+                </span>
+              </span>
+            </div>
+          </div>
+
+          {patientDailyPlan.aiReason && (
+            <div className="mb-4 p-3.5 rounded-2xl bg-gradient-to-r from-purple-50 via-indigo-50/40 to-white border border-purple-200/80 text-xs text-purple-950 font-medium flex items-start gap-2.5">
+              <Sparkles className="w-4 h-4 text-purple-600 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-extrabold text-purple-900 uppercase tracking-wider text-[10px]">
+                  AI Adaptive Insight:
+                </span>{' '}
+                "{patientDailyPlan.aiReason}"
+              </div>
+            </div>
+          )}
+
+          {/* Task Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {patientDailyPlan.tasks.map((task) => (
+              <div
+                key={task.id}
+                className={`p-3.5 rounded-2xl border transition-all flex items-center justify-between gap-3 ${
+                  task.completed
+                    ? 'bg-emerald-50/70 border-emerald-300 text-emerald-950 shadow-xs'
+                    : 'bg-gray-50/80 border-gray-200 text-gray-800'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  {task.completed ? (
+                    <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 fill-emerald-100" />
+                  ) : (
+                    <div className="w-5 h-5 rounded-full border-2 border-gray-300 shrink-0" />
+                  )}
+                  <div className="min-w-0">
+                    <div className={`text-xs font-bold truncate ${task.completed ? 'line-through text-gray-500' : 'text-gray-900'}`}>
+                      {task.title[currentLang] || task.title.en}
+                    </div>
+                    <div className="text-[11px] text-gray-500 truncate">
+                      {task.subtitle[currentLang] || task.subtitle.en}
+                    </div>
+                  </div>
+                </div>
+                <span className="text-[10px] font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-200 shrink-0">
+                  +{task.rewardXp} XP
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* GEMINI CAREGIVER AI INSIGHTS CARD */}
       <div className="bg-gradient-to-br from-purple-50 via-white to-indigo-50/40 p-6 sm:p-7 rounded-3xl shadow-elder border-2 border-purple-200 relative overflow-hidden">
