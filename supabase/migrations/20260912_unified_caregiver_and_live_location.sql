@@ -117,9 +117,15 @@ BEGIN
     RAISE EXCEPTION 'Authentication required: caller must be logged in' USING ERRCODE = '28000';
   END IF;
 
-  -- Verify caller is a caregiver
+  -- Verify caller is a caregiver in profiles or auth metadata
   SELECT role INTO v_caller_role FROM public.profiles WHERE id = v_caller_id;
-  IF v_caller_role IS DISTINCT FROM 'caregiver' THEN
+  IF v_caller_role IS NULL OR lower(trim(v_caller_role)) != 'caregiver' THEN
+    SELECT (raw_user_meta_data->>'role') INTO v_caller_role
+    FROM auth.users
+    WHERE id = v_caller_id;
+  END IF;
+
+  IF v_caller_role IS NULL OR lower(trim(v_caller_role)) != 'caregiver' THEN
     RAISE EXCEPTION 'Access denied: caller must have caregiver role' USING ERRCODE = '42501';
   END IF;
 

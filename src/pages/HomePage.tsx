@@ -148,7 +148,15 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
     window.addEventListener('visibilitychange', onVisibilityChange);
     window.addEventListener('focus', onVisibilityChange);
 
+    // 4. Auto-poll every 4 seconds so cross-browser updates reflect automatically
+    const pollTimer = setInterval(() => {
+      if (document.visibilityState === 'visible' && currentUser.id && currentUser.id !== 'guest') {
+        fetchAssignedCaregiver(currentUser.id);
+      }
+    }, 4000);
+
     return () => {
+      clearInterval(pollTimer);
       supabase.removeChannel(channel);
       window.removeEventListener('visibilitychange', onVisibilityChange);
       window.removeEventListener('focus', onVisibilityChange);

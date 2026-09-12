@@ -218,14 +218,48 @@ class CaregiverService {
 
           if (!linkErr && linkRows && linkRows.length > 0 && linkRows[0].patient_id) {
             const patientId = linkRows[0].patient_id;
-            const { data: ptData } = await supabase
-              .from('profiles')
-              .select('*')
-              .eq('id', patientId)
-              .maybeSingle();
+            let ptFound: any = null;
 
-            if (ptData && !ptData.id.startsWith('elder-')) {
-              assignedPatients.push(ptData);
+            // A. Try find_patient_for_connection RPC (SECURITY DEFINER - succeeds for caregivers)
+            try {
+              const { data: rpcPt } = await supabase.rpc('find_patient_for_connection', {
+                identifier: patientId,
+              });
+              if (rpcPt) {
+                const rows = Array.isArray(rpcPt) ? rpcPt : [rpcPt];
+                if (rows.length > 0 && rows[0]?.id) {
+                  ptFound = rows[0];
+                }
+              }
+            } catch {}
+
+            // B. Try profiles query fallback
+            if (!ptFound) {
+              try {
+                const { data: ptData } = await supabase
+                  .from('profiles')
+                  .select('*')
+                  .eq('id', patientId)
+                  .maybeSingle();
+
+                if (ptData && !ptData.id.startsWith('elder-')) {
+                  ptFound = ptData;
+                }
+              } catch {}
+            }
+
+            // C. Guarantee patient object even if profiles table RLS blocks reading details
+            if (ptFound) {
+              assignedPatients.push(ptFound);
+            } else {
+              assignedPatients.push({
+                id: patientId,
+                name: 'Senior Patient',
+                full_name: 'Senior Patient',
+                preferred_name: 'Senior',
+                role: 'elderly',
+                caregiverIds: [caregiverId],
+              });
             }
           }
         } catch (err) {
@@ -479,51 +513,64 @@ class CaregiverService {
         if (!linkErr && linkRows && linkRows.length > 0 && linkRows[0].caregiver_id) {
           const cgId = linkRows[0].caregiver_id;
 
-          const { data: cgData } = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', cgId)
-            .maybeSingle();
+          let cgName = 'Family Caregiver';
+          let cgPreferred = 'Caregiver';
+          let cgEmail = '';
+          let cgPhone = '';
+          let cgAvatar = `https://api.dicebear.com/9.x/avataaars/svg?seed=${cgId}&backgroundColor=b6e3f4`;
+          let cgCreatedAt = new Date().toISOString();
 
-          if (cgData && !(cgData.full_name || '').includes('Dr. Admin Caregiver')) {
-            const mapped: UserProfile = {
-              id: cgData.id,
-              name: cgData.full_name || cgData.preferred_name || 'Family Caregiver',
-              preferredName: cgData.preferred_name || 'Caregiver',
-              role: 'caregiver',
-              email: cgData.email || '',
-              phone: cgData.phone || '',
-              age: cgData.age || 40,
-              gender: cgData.gender || 'other',
-              avatarUrl:
-                cgData.profile_photo_url ||
-                cgData.avatar_url ||
-                `https://api.dicebear.com/9.x/avataaars/svg?seed=${cgData.id}&backgroundColor=b6e3f4`,
-              primaryLanguage: 'en',
-              city: cgData.city || 'Guwahati',
-              state: cgData.state || 'Assam',
-              isAyushmanMember: false,
-              ayushmanStatus: 'none',
-              pmjayStatus: 'none',
-              abhaStatus: 'none',
-              hasCompletedOnboarding: true,
-              caregiverIds: [effectivePatientId],
-              clinicianIds: [],
-              accessibility: {
-                fontSize: 'normal',
-                highContrast: false,
-                textToSpeechAuto: false,
-                soundEffects: true,
-                speechRate: 1.0,
-              },
-              streakDays: 1,
-              totalXp: 50,
-              level: 1,
-              levelTitle: 'Caregiver',
-              createdAt: cgData.created_at || new Date().toISOString(),
-            };
-            return mapped;
-          }
+          try {
+            const { data: cgData } = await supabase
+              .from('profiles')
+              .select('*')
+              .eq('id', cgId)
+              .maybeSingle();
+
+            if (cgData) {
+              cgName = cgData.full_name || cgData.preferred_name || cgName;
+              cgPreferred = cgData.preferred_name || cgName;
+              cgEmail = cgData.email || '';
+              cgPhone = cgData.phone || '';
+              cgAvatar = cgData.profile_photo_url || cgData.avatar_url || cgAvatar;
+              cgCreatedAt = cgData.created_at || cgCreatedAt;
+            }
+          } catch {}
+
+          const mapped: UserProfile = {
+            id: cgId,
+            name: cgName,
+            preferredName: cgPreferred,
+            role: 'caregiver',
+            email: cgEmail,
+            phone: cgPhone,
+            age: 40,
+            gender: 'other',
+            avatarUrl: cgAvatar,
+            primaryLanguage: 'en',
+            city: 'Guwahati',
+            state: 'Assam',
+            isAyushmanMember: false,
+            ayushmanStatus: 'none',
+            pmjayStatus: 'none',
+            abhaStatus: 'none',
+            hasCompletedOnboarding: true,
+            caregiverIds: [effectivePatientId],
+            clinicianIds: [],
+            accessibility: {
+              fontSize: 'normal',
+              highContrast: false,
+              textToSpeechAuto: false,
+              soundEffects: true,
+              speechRate: 1.0,
+            },
+            streakDays: 1,
+            totalXp: 50,
+            level: 1,
+            levelTitle: 'Caregiver',
+            createdAt: cgCreatedAt,
+          };
+          return mapped;
         }
       }
     } catch (e) {

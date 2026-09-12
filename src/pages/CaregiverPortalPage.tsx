@@ -209,7 +209,15 @@ export const CaregiverPortalPage: React.FC = () => {
       window.addEventListener('visibilitychange', onVisibilityChange);
       window.addEventListener('focus', onVisibilityChange);
 
+      // Auto-poll every 4 seconds so cross-browser updates reflect automatically
+      const pollTimer = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          refreshAssignedPatients(currentUser.id);
+        }
+      }, 4000);
+
       return () => {
+        clearInterval(pollTimer);
         supabase.removeChannel(channel);
         window.removeEventListener('visibilitychange', onVisibilityChange);
         window.removeEventListener('focus', onVisibilityChange);
