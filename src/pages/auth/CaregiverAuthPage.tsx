@@ -93,9 +93,27 @@ export const CaregiverAuthPage: React.FC<CaregiverAuthPageProps> = ({
                 className="py-4 shadow-sm hover:shadow-md border-emerald-200 hover:bg-emerald-50/40 text-emerald-900 font-extrabold"
               />
 
-              <div className="flex items-center justify-center gap-2 text-xs text-gray-500 font-medium bg-emerald-50/60 p-3.5 rounded-2xl border border-emerald-100">
+              {/* Direct Link to Caregiver Email Portal */}
+              <div className="relative my-2">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-gray-200" />
+                </div>
+                <div className="relative flex justify-center text-[10px] uppercase">
+                  <span className="bg-white px-2 font-bold text-gray-400">Or use email & password</span>
+                </div>
+              </div>
+
+              <a
+                href="/caregiver.html"
+                className="w-full py-3.5 px-4 rounded-xl bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-black text-xs border border-emerald-300 flex items-center justify-center gap-2 transition-all shadow-xs cursor-pointer"
+              >
+                <HeartHandshake className="w-4 h-4 text-emerald-700" />
+                <span>Open Caregiver Portal (Sign In / Register)</span>
+              </a>
+
+              <div className="flex items-center justify-center gap-2 text-xs text-gray-500 font-medium bg-emerald-50/60 p-3 rounded-2xl border border-emerald-100">
                 <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>Verified Google Authentication • Database-backed Security</span>
+                <span>Direct Access • Zero Email Rate Limits</span>
               </div>
             </div>
 

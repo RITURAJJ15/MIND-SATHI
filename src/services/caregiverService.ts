@@ -361,65 +361,49 @@ class CaregiverService {
    * Checks Supabase caregiver_patient, profiles table, and local caches.
    */
   public async getAssignedCaregiverForPatient(patientId: string): Promise<UserProfile | null> {
-    if (!patientId) return null;
+    if (!patientId || patientId === 'guest') return null;
 
-    const allProfiles = authService.getAllProfiles();
-    const patient = allProfiles.find((p) => p.id === patientId);
-
-    // 1. Check patient profile's caregiverIds
-    if (patient?.caregiverIds && patient.caregiverIds.length > 0) {
-      const cgId = patient.caregiverIds[0];
-      const cg = allProfiles.find(
-        (p) =>
-          (p.id === cgId || (p.email && p.email.toLowerCase() === cgId.toLowerCase())) &&
-          p.role === 'caregiver'
-      );
-      if (cg && !cg.name.includes('Dr. Admin Caregiver')) {
-        return cg;
+    // Verify authenticated session
+    let effectivePatientId = patientId;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user?.id) {
+        effectivePatientId = session.user.id;
       }
+    } catch (e) {
+      console.warn('[CaregiverService] Session check note:', e);
     }
 
-    // 2. Check Supabase caregiver_patient table
+    if (!effectivePatientId || effectivePatientId === 'guest') return null;
+
+    // ── 1. Authoritative Supabase RPC check (Single Roundtrip, SECURITY DEFINER) ──
     try {
-      const { data: linkRows } = await supabase
-        .from('caregiver_patient')
-        .select('caregiver_id')
-        .eq('patient_id', patientId)
-        .limit(1);
-
-      if (linkRows && linkRows.length > 0 && linkRows[0].caregiver_id) {
-        const cgId = linkRows[0].caregiver_id;
-        const cg = allProfiles.find((p) => p.id === cgId);
-        if (cg && !cg.name.includes('Dr. Admin Caregiver')) return cg;
-
-        const { data: cgData } = await supabase
-          .from('profiles')
-          .select('*')
-          .eq('id', cgId)
-          .maybeSingle();
-
-        if (cgData && !(cgData.full_name || '').includes('Dr. Admin Caregiver')) {
+      const { data: rpcData, error: rpcErr } = await supabase.rpc('get_connected_caregiver_for_patient');
+      if (!rpcErr && rpcData) {
+        const rows = Array.isArray(rpcData) ? rpcData : [rpcData];
+        if (rows.length > 0 && rows[0] && rows[0].caregiver_id) {
+          const row = rows[0];
           const mapped: UserProfile = {
-            id: cgData.id,
-            name: cgData.full_name || 'Assigned Caregiver',
-            preferredName: cgData.preferred_name || 'Caregiver',
+            id: row.caregiver_id,
+            name: row.name || row.full_name || 'Family Caregiver',
+            preferredName: row.preferred_name || row.name || 'Caregiver',
             role: 'caregiver',
-            email: cgData.email || '',
-            phone: cgData.phone || '',
-            age: cgData.age || 40,
-            gender: cgData.gender || 'other',
+            email: row.email || '',
+            phone: row.phone || '',
+            age: 40,
+            gender: 'other',
             avatarUrl:
-              cgData.profile_photo_url ||
-              `https://api.dicebear.com/9.x/avataaars/svg?seed=${cgData.id}&backgroundColor=b6e3f4`,
+              row.avatar_url ||
+              `https://api.dicebear.com/9.x/avataaars/svg?seed=${row.caregiver_id}&backgroundColor=b6e3f4`,
             primaryLanguage: 'en',
-            city: cgData.city || 'Guwahati',
-            state: cgData.state || 'Assam',
+            city: 'Guwahati',
+            state: 'Assam',
             isAyushmanMember: false,
             ayushmanStatus: 'none',
             pmjayStatus: 'none',
             abhaStatus: 'none',
             hasCompletedOnboarding: true,
-            caregiverIds: [patientId],
+            caregiverIds: [effectivePatientId],
             clinicianIds: [],
             accessibility: {
               fontSize: 'normal',
@@ -432,35 +416,101 @@ class CaregiverService {
             totalXp: 50,
             level: 1,
             levelTitle: 'Caregiver',
-            createdAt: cgData.created_at || new Date().toISOString(),
+            createdAt: row.connected_at || new Date().toISOString(),
           };
           return mapped;
         }
       }
     } catch (e) {
-      console.warn('[CaregiverService] getAssignedCaregiverForPatient note:', e);
+      console.warn('[CaregiverService] get_connected_caregiver_for_patient RPC notice:', e);
     }
 
-    // 3. Check local storage
+    // ── 2. Direct Supabase caregiver_patient query fallback ─────────────────────
     try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith(`${STORAGE_KEY_CAREGIVER_PATIENT}_`)) {
-          const raw = localStorage.getItem(key);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed) && parsed.some((pt) => pt.id === patientId)) {
-              const cgId = key.replace(`${STORAGE_KEY_CAREGIVER_PATIENT}_`, '');
-              const foundCg = allProfiles.find(
-                (p) =>
-                  (p.id === cgId || (p.email && p.email.toLowerCase() === cgId.toLowerCase())) &&
-                  p.role === 'caregiver'
-              );
-              if (foundCg && !foundCg.name.includes('Dr. Admin Caregiver')) {
-                return foundCg;
-              }
-            }
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(effectivePatientId)) {
+        const { data: linkRows, error: linkErr } = await supabase
+          .from('caregiver_patient')
+          .select('caregiver_id')
+          .eq('patient_id', effectivePatientId)
+          .limit(1);
+
+        if (!linkErr && linkRows && linkRows.length > 0 && linkRows[0].caregiver_id) {
+          const cgId = linkRows[0].caregiver_id;
+
+          const { data: cgData } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', cgId)
+            .maybeSingle();
+
+          if (cgData && !(cgData.full_name || '').includes('Dr. Admin Caregiver')) {
+            const mapped: UserProfile = {
+              id: cgData.id,
+              name: cgData.full_name || cgData.preferred_name || 'Family Caregiver',
+              preferredName: cgData.preferred_name || 'Caregiver',
+              role: 'caregiver',
+              email: cgData.email || '',
+              phone: cgData.phone || '',
+              age: cgData.age || 40,
+              gender: cgData.gender || 'other',
+              avatarUrl:
+                cgData.profile_photo_url ||
+                cgData.avatar_url ||
+                `https://api.dicebear.com/9.x/avataaars/svg?seed=${cgData.id}&backgroundColor=b6e3f4`,
+              primaryLanguage: 'en',
+              city: cgData.city || 'Guwahati',
+              state: cgData.state || 'Assam',
+              isAyushmanMember: false,
+              ayushmanStatus: 'none',
+              pmjayStatus: 'none',
+              abhaStatus: 'none',
+              hasCompletedOnboarding: true,
+              caregiverIds: [effectivePatientId],
+              clinicianIds: [],
+              accessibility: {
+                fontSize: 'normal',
+                highContrast: false,
+                textToSpeechAuto: false,
+                soundEffects: true,
+                speechRate: 1.0,
+              },
+              streakDays: 1,
+              totalXp: 50,
+              level: 1,
+              levelTitle: 'Caregiver',
+              createdAt: cgData.created_at || new Date().toISOString(),
+            };
+            return mapped;
           }
+        }
+      }
+    } catch (e) {
+      console.warn('[CaregiverService] Direct caregiver_patient query note:', e);
+    }
+
+    // ── 3. Central Sync Service fallback ──────────────────────────────────────
+    try {
+      const syncPatient = await centralSyncService.getAssignedPatient(effectivePatientId);
+      if (syncPatient && syncPatient.caregiverIds && syncPatient.caregiverIds.length > 0) {
+        const allProfiles = authService.getAllProfiles();
+        const found = allProfiles.find((p) => syncPatient.caregiverIds.includes(p.id));
+        if (found) return found;
+      }
+    } catch (e) {
+      console.warn('[CaregiverService] CentralSync fallback note:', e);
+    }
+
+    // ── 4. Local Caches fallback (only if valid UUID) ──────────────────────────
+    try {
+      const allProfiles = authService.getAllProfiles();
+      const patient = allProfiles.find((p) => p.id === effectivePatientId);
+      if (patient?.caregiverIds && patient.caregiverIds.length > 0) {
+        const cgId = patient.caregiverIds[0];
+        const cg = allProfiles.find(
+          (p) => (p.id === cgId || (p.email && p.email.toLowerCase() === cgId.toLowerCase())) && p.role === 'caregiver'
+        );
+        if (cg && !cg.name.includes('Dr. Admin Caregiver')) {
+          return cg;
         }
       }
     } catch {}
@@ -577,6 +627,22 @@ class CaregiverService {
     const cleanUpper = patientIdentifier.trim().toUpperCase();
     const cleanDigits = cleanInput.replace(/\D/g, '');
 
+    // ── Pre-flight: Verify Supabase authentication state immediately ──
+    let session = (await supabase.auth.getSession()).data.session;
+    if (!session || !session.user) {
+      const refreshRes = await supabase.auth.refreshSession();
+      session = refreshRes.data?.session || null;
+    }
+
+    if (!session || !session.user) {
+      return {
+        success: false,
+        error: 'Your session has expired or you are not logged in. Please sign in as a caregiver to connect to a patient.',
+      };
+    }
+
+    const effectiveCaregiverId = session.user.id || caregiverId;
+
     try {
       let targetPatient: any = null;
 
@@ -600,7 +666,6 @@ class CaregiverService {
 
         targetPatient = localProfiles.find((p) => {
           if (p.connectionCode && (p.connectionCode.toLowerCase() === cleanInput || p.connectionCode.toUpperCase() === cleanUpper)) return true;
-          if (p.secondaryLanguage && (p.secondaryLanguage.toLowerCase() === cleanInput || p.secondaryLanguage.toUpperCase() === cleanUpper)) return true;
           if (p.id.toLowerCase() === cleanInput) return true;
           if (p.email && p.email.toLowerCase() === cleanInput) return true;
           if ((p as any).phone && (p as any).phone.toLowerCase() === cleanInput) return true;
@@ -683,19 +748,50 @@ class CaregiverService {
 
           if (rpcErr) {
             console.warn('[CaregiverService] find_patient_for_connection RPC error:', rpcErr);
+
+            // Function-level authentication failure (ERRCODE 28000)
             if (rpcErr.code === '28000' || rpcErr.message?.includes('Authentication required')) {
               return {
                 success: false,
-                error: 'Authentication required. Please sign in as a caregiver to connect to a patient.',
+                error: 'Authentication required: please sign in as a caregiver to connect to a patient.',
               };
             }
-            if (rpcErr.code === '42501' || rpcErr.message?.includes('caller must have caregiver role')) {
+
+            // Role authorization failure (ERRCODE 42501 with caregiver role message)
+            if (
+              rpcErr.code === '42501' &&
+              (rpcErr.message?.includes('caller must have caregiver role') || rpcErr.message?.includes('Access denied'))
+            ) {
               return {
                 success: false,
-                error: 'Access denied. Only registered caregivers can look up and connect to patients.',
+                error: 'Access denied: only registered caregivers can look up and connect to patients.',
               };
             }
-          } else if (rpcData) {
+
+            // PostgreSQL permission failure (ERRCODE 42501 permission denied for function)
+            if (rpcErr.code === '42501' && rpcErr.message?.includes('permission denied for function')) {
+              return {
+                success: false,
+                error: 'Session expired or unauthenticated request. Please sign in again as a caregiver.',
+              };
+            }
+
+            // Self-linking failure (ERRCODE 22000)
+            if (rpcErr.code === '22000' || rpcErr.message?.includes('Cannot connect to your own account')) {
+              return {
+                success: false,
+                error: 'Cannot connect to your own account as a patient.',
+              };
+            }
+
+            // Database or other unexpected failure
+            return {
+              success: false,
+              error: rpcErr.message || 'Database error occurred during patient lookup.',
+            };
+          }
+
+          if (rpcData) {
             const rows = Array.isArray(rpcData) ? rpcData : [rpcData];
             if (rows.length > 0 && rows[0] && rows[0].id) {
               const row = rows[0];
@@ -707,11 +803,8 @@ class CaregiverService {
                 preferredName: row.preferred_name || row.full_name || 'Patient',
                 role: row.role || 'elderly',
                 email: row.email || cleanInput,
-                connectionCode: row.connection_code,
-                connection_code: row.connection_code,
-                secondary_language: row.connection_code,
                 profile_photo_url: row.profile_photo_url,
-                avatarUrl: row.avatar_url || row.profile_photo_url,
+                avatarUrl: row.profile_photo_url,
                 isAlreadyLinked: row.is_already_linked,
                 linkedToCaller: row.linked_to_caller,
               };
@@ -719,6 +812,10 @@ class CaregiverService {
           }
         } catch (err: any) {
           console.warn('[CaregiverService] Supabase RPC search exception:', err);
+          return {
+            success: false,
+            error: err.message || 'An unexpected error occurred during patient lookup.',
+          };
         }
       }
 
@@ -739,7 +836,6 @@ class CaregiverService {
           state: 'Assam',
           avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80',
           profile_photo_url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80',
-          connectionCode: 'MS-RAMESH',
           streakDays: 5,
           totalXp: 340,
           level: 3,
@@ -751,7 +847,7 @@ class CaregiverService {
       if (!targetPatient || targetPatient.id?.startsWith('elder-')) {
         return {
           success: false,
-          error: `No registered patient found with identifier "${patientIdentifier.trim()}". Please verify the patient's registered email or connection code (e.g. MS-XXXXXX).`,
+          error: `No registered patient found with identifier "${patientIdentifier.trim()}". Please verify the patient's registered email.`,
         };
       }
 
@@ -773,7 +869,7 @@ class CaregiverService {
             .eq('patient_id', targetPatient.id)
             .maybeSingle();
 
-          if (existingLink && existingLink.caregiver_id !== caregiverId) {
+          if (existingLink && existingLink.caregiver_id !== effectiveCaregiverId) {
             return {
               success: false,
               error: `Patient "${targetPatient.full_name || targetPatient.name}" is already linked to another caregiver. Mind Sathi strictly maintains a 1 Patient ↔ 1 Caregiver relationship.`,
@@ -786,43 +882,33 @@ class CaregiverService {
 
       // Check central sync store
       try {
-        const assignedCheck = await centralSyncService.getAssignedPatient(caregiverId);
+        const assignedCheck = await centralSyncService.getAssignedPatient(effectiveCaregiverId);
         if (assignedCheck && assignedCheck.id !== targetPatient.id) {
-          await centralSyncService.unlinkPatient(caregiverId);
+          await centralSyncService.unlinkPatient(effectiveCaregiverId);
         }
       } catch {}
 
-      // Format and normalize target patient
-      const connCode =
-        targetPatient.connectionCode ||
-        targetPatient.secondary_language ||
-        ('MS-' + (targetPatient.id || '').replace(/-/g, '').substring(0, 6).toUpperCase());
-
       const allProfiles = authService.getAllProfiles();
-      const cgProfile = allProfiles.find((p) => p.id === caregiverId);
+      const cgProfile = allProfiles.find((p) => p.id === effectiveCaregiverId);
 
       // ── Step 7: Save 1-to-1 Link in Central Sync, Database & Local Storage ───────────
       // 1. Central Sync (guarantees cross-device availability)
       await centralSyncService.linkPatient(
-        caregiverId,
+        effectiveCaregiverId,
         targetPatient.id,
         cgProfile?.email,
-        targetPatient.email || cleanInput,
-        connCode
+        targetPatient.email || cleanInput
       );
 
-      // 2. Supabase caregiver_patient
+      // 2. Supabase caregiver_patient (using verified columns: caregiver_id, patient_id)
       try {
-        const isCgUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(caregiverId);
+        const isCgUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(effectiveCaregiverId);
         const isPtUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetPatient.id);
         if (isCgUuid && isPtUuid) {
-          await supabase.from('caregiver_patient').delete().eq('caregiver_id', caregiverId);
+          await supabase.from('caregiver_patient').delete().eq('caregiver_id', effectiveCaregiverId);
           const { error: insertErr } = await supabase.from('caregiver_patient').insert({
-            caregiver_id: caregiverId,
+            caregiver_id: effectiveCaregiverId,
             patient_id: targetPatient.id,
-            status: 'approved',
-            relationship: 'Caregiver',
-            connection_code: connCode,
           });
 
           if (insertErr) {
@@ -848,23 +934,21 @@ class CaregiverService {
         preferredName: targetPatient.preferred_name || targetPatient.preferredName || targetPatient.name,
         email: targetPatient.email || cleanInput,
         phone: targetPatient.phone || '',
-        connectionCode: connCode,
-        secondary_language: connCode,
-        avatarUrl: targetPatient.profile_photo_url || targetPatient.avatarUrl || `https://api.dicebear.com/9.x/avataaars/svg?seed=${targetPatient.id}&backgroundColor=b6e3f4`,
-        profile_photo_url: targetPatient.profile_photo_url || targetPatient.avatarUrl || `https://api.dicebear.com/9.x/avataaars/svg?seed=${targetPatient.id}&backgroundColor=b6e3f4`,
-        caregiverIds: [caregiverId],
+        avatarUrl: targetPatient.profile_photo_url || `https://api.dicebear.com/9.x/avataaars/svg?seed=${targetPatient.id}&backgroundColor=b6e3f4`,
+        profile_photo_url: targetPatient.profile_photo_url || `https://api.dicebear.com/9.x/avataaars/svg?seed=${targetPatient.id}&backgroundColor=b6e3f4`,
+        caregiverIds: [effectiveCaregiverId],
       };
 
       // 4. Update local storage
-      const cachedKey = `${STORAGE_KEY_CAREGIVER_PATIENT}_${caregiverId}`;
+      const cachedKey = `${STORAGE_KEY_CAREGIVER_PATIENT}_${effectiveCaregiverId}`;
       localStorage.setItem(cachedKey, JSON.stringify([formattedPatient]));
 
       const existingIdx = allProfiles.findIndex((p) => p.id === targetPatient.id);
       if (existingIdx >= 0) {
         allProfiles[existingIdx] = {
           ...allProfiles[existingIdx],
-          caregiverIds: [caregiverId],
-          connectionCode: connCode,
+          caregiverIds: [effectiveCaregiverId],
+          connectionCode: targetPatient.connectionCode || '',
         };
       }
       if (cgProfile) {

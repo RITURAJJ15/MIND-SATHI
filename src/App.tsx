@@ -112,7 +112,7 @@ export const App: React.FC = () => {
     const wasCaregiver = currentUser?.role === 'caregiver' || isCaregiver;
     await authService.logout();
     if (wasCaregiver) {
-      navigate('/caregiver/auth', true);
+      window.location.href = '/caregiver.html';
     } else {
       navigate('/', true);
     }
@@ -120,7 +120,7 @@ export const App: React.FC = () => {
 
   const handleAuthSuccess = (role: AuthRole) => {
     if (role === 'caregiver') {
-      navigate('/caregiver/dashboard', true);
+      window.location.href = '/caregiver.html';
     } else if (role === 'clinician') {
       navigate('/doctor/dashboard', true);
     } else {

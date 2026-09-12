@@ -1,5 +1,7 @@
 import type { Plugin } from 'vite';
 import http from 'http';
+import fs from 'fs';
+import path from 'path';
 
 function parseJsonBody(req: http.IncomingMessage): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -332,19 +334,317 @@ Provide comprehensive caregiver insights in JSON format.`;
   return true;
 }
 
+interface SyncStore {
+  patients: any[];
+  caregivers: any[];
+  links: Array<{ caregiverId: string; patientId: string; caregiverEmail?: string; patientEmail?: string; connectionCode?: string; linkedAt: string }>;
+}
+
+const STORE_DIR = path.resolve(process.cwd(), 'data');
+const STORE_FILE = path.join(STORE_DIR, 'mindsathi_store.json');
+
+function loadSyncStore(): SyncStore {
+  try {
+    if (!fs.existsSync(STORE_DIR)) {
+      fs.mkdirSync(STORE_DIR, { recursive: true });
+    }
+    if (fs.existsSync(STORE_FILE)) {
+      const raw = fs.readFileSync(STORE_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      return {
+        patients: Array.isArray(parsed.patients) ? parsed.patients : [],
+        caregivers: Array.isArray(parsed.caregivers) ? parsed.caregivers : [],
+        links: Array.isArray(parsed.links) ? parsed.links : [],
+      };
+    }
+  } catch (e) {
+    console.warn('[SyncStore] Load notice:', e);
+  }
+  return {
+    patients: [
+      {
+        id: '11111111-1111-4000-a000-000000000001',
+        full_name: 'Ramesh Kumar',
+        name: 'Ramesh Kumar',
+        preferred_name: 'Ramesh Ji',
+        preferredName: 'Ramesh Ji',
+        role: 'elderly',
+        email: 'ramesh@mindsathi.in',
+        phone: '9876543210',
+        age: 72,
+        gender: 'male',
+        city: 'Guwahati',
+        state: 'Assam',
+        connectionCode: 'MS-RAMESH',
+        secondaryLanguage: 'MS-RAMESH',
+        secondary_language: 'MS-RAMESH',
+        profile_photo_url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=300&q=80',
+        avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=300&q=80',
+        abha_id: '91-4829-1029-4820',
+        abhaId: '91-4829-1029-4820',
+        pmjay_id: 'PMJAY-AS-84729104',
+        pmjayId: 'PMJAY-AS-84729104',
+        streak_days: 5,
+        streakDays: 5,
+        total_xp: 450,
+        totalXp: 450,
+        level: 2,
+        level_title: 'Sadhak Sathi',
+        levelTitle: 'Sadhak Sathi',
+        createdAt: new Date().toISOString(),
+      },
+    ],
+    caregivers: [],
+    links: [],
+  };
+}
+
+function saveSyncStore(store: SyncStore): void {
+  try {
+    if (!fs.existsSync(STORE_DIR)) {
+      fs.mkdirSync(STORE_DIR, { recursive: true });
+    }
+    fs.writeFileSync(STORE_FILE, JSON.stringify(store, null, 2), 'utf-8');
+  } catch (e) {
+    console.error('[SyncStore] Save error:', e);
+  }
+}
+
+async function handleSyncApiRoute(req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
+  const [urlPath, queryString] = (req.url || '').split('?');
+  if (!urlPath.startsWith('/api/sync/')) {
+    return false;
+  }
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    });
+    res.end();
+    return true;
+  }
+
+  const queryParams = new URLSearchParams(queryString || '');
+  const store = loadSyncStore();
+
+  // 1. GET /api/sync/find-patient?q=...
+  if (urlPath === '/api/sync/find-patient' && req.method === 'GET') {
+    const q = (queryParams.get('q') || queryParams.get('query') || queryParams.get('code') || queryParams.get('email') || '').trim().toLowerCase();
+    const cleanDigits = q.replace(/\D/g, '');
+    const codeNoPrefix = q.replace(/^ms-?/i, '');
+
+    const found = store.patients.find((p) => {
+      const pEmail = (p.email || '').toLowerCase();
+      const pCode = (p.connectionCode || p.secondary_language || p.secondaryLanguage || '').toLowerCase();
+      const pCodeNoPrefix = pCode.replace(/^ms-?/i, '');
+      const pId = (p.id || '').toLowerCase();
+      const pName = (p.full_name || p.name || '').toLowerCase();
+      const pPhone = (p.phone || '').replace(/\D/g, '');
+
+      if (pEmail && pEmail === q) return true;
+      if (pCode && (pCode === q || pCodeNoPrefix === codeNoPrefix)) return true;
+      if (pId && (pId === q || pId.startsWith(q) || (codeNoPrefix.length >= 4 && pId.replace(/-/g, '').startsWith(codeNoPrefix)))) return true;
+      if (cleanDigits.length >= 10 && pPhone.endsWith(cleanDigits.slice(-10))) return true;
+      if (q.length > 2 && pName.includes(q)) return true;
+      return false;
+    });
+
+    if (found) {
+      sendJson(res, 200, { success: true, patient: found });
+    } else {
+      sendJson(res, 404, { success: false, error: 'No registered patient found with identifier ' + q });
+    }
+    return true;
+  }
+
+  // 2. POST /api/sync/store-patient
+  if (urlPath === '/api/sync/store-patient' && req.method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      const patient = body.patient || body;
+      if (!patient || !patient.id) {
+        sendJson(res, 400, { success: false, error: 'Patient object with id is required' });
+        return true;
+      }
+
+      const connectionCode = patient.connectionCode || patient.secondary_language || patient.secondaryLanguage || ('MS-' + patient.id.replace(/-/g, '').substring(0, 6).toUpperCase());
+      const normalized = {
+        ...patient,
+        connectionCode,
+        secondaryLanguage: connectionCode,
+        secondary_language: connectionCode,
+        updatedAt: new Date().toISOString(),
+      };
+
+      const existingIdx = store.patients.findIndex((p) => p.id === patient.id || (p.email && patient.email && p.email.toLowerCase() === patient.email.toLowerCase()));
+      if (existingIdx >= 0) {
+        store.patients[existingIdx] = { ...store.patients[existingIdx], ...normalized };
+      } else {
+        store.patients.push(normalized);
+      }
+      saveSyncStore(store);
+      sendJson(res, 200, { success: true, patient: normalized });
+    } catch (e: any) {
+      sendJson(res, 500, { success: false, error: e.message });
+    }
+    return true;
+  }
+
+  // 3. GET /api/sync/all-patients
+  if (urlPath === '/api/sync/all-patients' && req.method === 'GET') {
+    sendJson(res, 200, { success: true, patients: store.patients });
+    return true;
+  }
+
+  // 4. POST /api/sync/store-caregiver
+  if (urlPath === '/api/sync/store-caregiver' && req.method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      const caregiver = body.caregiver || body;
+      if (!caregiver || !caregiver.email) {
+        sendJson(res, 400, { success: false, error: 'Caregiver email is required' });
+        return true;
+      }
+
+      const cleanEmail = caregiver.email.toLowerCase();
+      const normalized = {
+        ...caregiver,
+        email: cleanEmail,
+        updatedAt: new Date().toISOString(),
+      };
+
+      const existingIdx = store.caregivers.findIndex((c) => c.email.toLowerCase() === cleanEmail || (caregiver.id && c.id === caregiver.id));
+      if (existingIdx >= 0) {
+        store.caregivers[existingIdx] = { ...store.caregivers[existingIdx], ...normalized };
+      } else {
+        store.caregivers.push(normalized);
+      }
+      saveSyncStore(store);
+      sendJson(res, 200, { success: true, caregiver: normalized });
+    } catch (e: any) {
+      sendJson(res, 500, { success: false, error: e.message });
+    }
+    return true;
+  }
+
+  // 5. GET /api/sync/get-caregiver?email=...
+  if (urlPath === '/api/sync/get-caregiver' && req.method === 'GET') {
+    const email = (queryParams.get('email') || '').trim().toLowerCase();
+    const found = store.caregivers.find((c) => c.email.toLowerCase() === email);
+    if (found) {
+      sendJson(res, 200, { success: true, caregiver: found });
+    } else {
+      sendJson(res, 404, { success: false, error: 'Caregiver not found' });
+    }
+    return true;
+  }
+
+  // 6. POST /api/sync/link-patient
+  if (urlPath === '/api/sync/link-patient' && req.method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      const { caregiverId, patientId, caregiverEmail, patientEmail, connectionCode } = body;
+      if (!caregiverId || !patientId) {
+        sendJson(res, 400, { success: false, error: 'caregiverId and patientId are required' });
+        return true;
+      }
+
+      // Check strict 1-to-1: is patient already linked to another caregiver?
+      const otherCg = store.links.find((l) => l.patientId === patientId && l.caregiverId !== caregiverId);
+      if (otherCg) {
+        sendJson(res, 409, {
+          success: false,
+          error: 'This patient is already linked to another caregiver. Mind Sathi strictly maintains a 1 Patient ↔ 1 Caregiver relationship.'
+        });
+        return true;
+      }
+
+      // Remove any prior link for this caregiver
+      store.links = store.links.filter((l) => l.caregiverId !== caregiverId && l.caregiverEmail !== caregiverEmail);
+
+      // Add link
+      store.links.push({
+        caregiverId,
+        patientId,
+        caregiverEmail: caregiverEmail?.toLowerCase(),
+        patientEmail: patientEmail?.toLowerCase(),
+        connectionCode,
+        linkedAt: new Date().toISOString(),
+      });
+      saveSyncStore(store);
+      sendJson(res, 200, { success: true, message: 'Linked successfully' });
+    } catch (e: any) {
+      sendJson(res, 500, { success: false, error: e.message });
+    }
+    return true;
+  }
+
+  // 7. POST /api/sync/unlink-patient
+  if (urlPath === '/api/sync/unlink-patient' && req.method === 'POST') {
+    try {
+      const body = await parseJsonBody(req);
+      const { caregiverId, patientId } = body;
+      store.links = store.links.filter((l) => l.caregiverId !== caregiverId && (!patientId || l.patientId !== patientId));
+      saveSyncStore(store);
+      sendJson(res, 200, { success: true, message: 'Unlinked successfully' });
+    } catch (e: any) {
+      sendJson(res, 500, { success: false, error: e.message });
+    }
+    return true;
+  }
+
+  // 8. GET /api/sync/get-assigned-patient?caregiverId=...
+  if (urlPath === '/api/sync/get-assigned-patient' && req.method === 'GET') {
+    const cgId = queryParams.get('caregiverId') || '';
+    const cgEmail = (queryParams.get('caregiverEmail') || '').toLowerCase();
+
+    const link = store.links.find((l) => (cgId && l.caregiverId === cgId) || (cgEmail && l.caregiverEmail === cgEmail));
+    if (!link) {
+      sendJson(res, 404, { success: false, error: 'No patient assigned' });
+      return true;
+    }
+
+    const patient = store.patients.find(
+      (p) =>
+        p.id === link.patientId ||
+        (link.patientEmail && p.email && p.email.toLowerCase() === link.patientEmail.toLowerCase()) ||
+        (link.connectionCode && (p.connectionCode === link.connectionCode || p.secondary_language === link.connectionCode)) ||
+        ((link.patientId === 'd8a2f3e4-5b6c-7d8e-9f0a-1b2c3d4e5f6a' || link.patientId === '11111111-1111-4000-a000-000000000001') &&
+         p.email === 'ramesh@mindsathi.in')
+    );
+    if (patient) {
+      sendJson(res, 200, { success: true, patient, link });
+    } else {
+      sendJson(res, 404, { success: false, error: 'Assigned patient record not found' });
+    }
+    return true;
+  }
+
+  sendJson(res, 404, { success: false, error: 'Unknown sync endpoint' });
+  return true;
+}
+
 export function geminiBackendPlugin(): Plugin {
   return {
     name: 'vite-gemini-backend-proxy',
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
-        const handled = await handleGeminiApiRoute(req, res);
-        if (!handled) next();
+        const handledGemini = await handleGeminiApiRoute(req, res);
+        if (handledGemini) return;
+        const handledSync = await handleSyncApiRoute(req, res);
+        if (handledSync) return;
+        next();
       });
     },
     configurePreviewServer(server) {
       server.middlewares.use(async (req, res, next) => {
-        const handled = await handleGeminiApiRoute(req, res);
-        if (!handled) next();
+        const handledGemini = await handleGeminiApiRoute(req, res);
+        if (handledGemini) return;
+        const handledSync = await handleSyncApiRoute(req, res);
+        if (handledSync) return;
+        next();
       });
     },
   };

@@ -27,14 +27,25 @@ export type AppRoute =
   | '/doctor/dashboard';
 
 export function getCleanHashPath(): string {
+  const search = window.location.search || '';
   const hash = window.location.hash || '';
-  if (!hash || hash === '#' || hash === '#/') {
-    return '/';
+
+  // Handle Supabase OAuth callback tokens/codes in query or hash:
+  // e.g. /?code=... or /?error=... or #access_token=... or #/auth/callback
+  if (
+    search.includes('code=') ||
+    search.includes('error=') ||
+    hash.includes('code=') ||
+    hash.includes('access_token=') ||
+    hash.includes('error=') ||
+    hash.startsWith('#/auth/callback') ||
+    hash.includes('/auth/callback')
+  ) {
+    return '/auth/callback';
   }
 
-  // Handle Supabase auth tokens in hash (e.g. #access_token=... or #/auth/callback#access_token=...)
-  if (hash.includes('access_token=') || hash.includes('error=')) {
-    return '/auth/callback';
+  if (!hash || hash === '#' || hash === '#/') {
+    return '/';
   }
 
   // Remove leading '#'

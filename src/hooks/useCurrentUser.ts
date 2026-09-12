@@ -34,14 +34,31 @@ export function useCurrentUser(contextTab?: string) {
 
   const switchProfile = (userId: string) => authService.switchUser(userId);
 
-  const isCaregiverSession = session?.user?.role === 'caregiver' || currentUser?.role === 'caregiver';
+  const isCaregiverSession = Boolean(
+    session?.user?.role === 'caregiver' ||
+    currentUser?.role === 'caregiver' ||
+    authService.getCurrentUser(contextTab)?.role === 'caregiver' ||
+    authService.getCaregiverProfile() !== null
+  );
+
+  const isElderlySession = Boolean(
+    ((session?.user?.role as string) === 'elderly' || (session?.user?.role as string) === 'patient') ||
+    (currentUser?.role === 'elderly' || (currentUser?.role as string) === 'patient') ||
+    (authService.getCurrentUser(contextTab)?.role === 'elderly' || (authService.getCurrentUser(contextTab)?.role as string) === 'patient')
+  );
+
+  const isClinicianSession = Boolean(
+    session?.user?.role === 'clinician' ||
+    currentUser?.role === 'clinician' ||
+    authService.getCurrentUser(contextTab)?.role === 'clinician'
+  );
 
   // Safe fallback so components that assume non-null don't throw
   const safeUser: UserProfile = currentUser ?? {
     id: 'guest',
     name: 'Guest',
     preferredName: 'Guest',
-    role: isCaregiverSession ? 'caregiver' : 'elderly',
+    role: isCaregiverSession ? 'caregiver' : (isClinicianSession ? 'clinician' : 'elderly'),
     age: 0,
     gender: 'other',
     avatarUrl: '',
@@ -63,19 +80,21 @@ export function useCurrentUser(contextTab?: string) {
   const completeGoogleProfile = (role: any, details?: any) => authService.completeGoogleProfile(role, details);
   const signInWithGoogle = (intendedRole?: any) => authService.signInWithGoogle(intendedRole);
 
+  const isAuthenticated = !isLoading && authService.isAuthenticated();
+
   return {
     currentUser: safeUser,
     session,
     allProfiles,
     switchProfile,
     isLoading,
-    isAuthenticated: !isLoading && authService.isAuthenticated(),
+    isAuthenticated,
     needsRoleSelection,
     completeGoogleProfile,
     signInWithGoogle,
-    isElderly:   !isCaregiverSession && safeUser.role === 'elderly',
-    isCaregiver: isCaregiverSession || safeUser.role === 'caregiver',
-    isClinician: safeUser.role === 'clinician',
-    isAdmin:     safeUser.role === 'admin',
+    isElderly:   isAuthenticated && !isCaregiverSession && isElderlySession,
+    isCaregiver: isCaregiverSession,
+    isClinician: isAuthenticated && isClinicianSession,
+    isAdmin:     isAuthenticated && safeUser.role === 'admin',
   };
 }

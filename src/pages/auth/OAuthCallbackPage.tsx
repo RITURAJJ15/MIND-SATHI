@@ -46,7 +46,7 @@ export const OAuthCallbackPage: React.FC = () => {
           <div className="pt-2 flex gap-3">
             <button
               type="button"
-              onClick={() => navigate('/caregiver/auth', true)}
+              onClick={() => { window.location.href = '/caregiver.html'; }}
               className="flex-1 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer transition-all"
             >
               Caregiver Login

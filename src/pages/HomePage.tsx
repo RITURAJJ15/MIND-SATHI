@@ -17,7 +17,9 @@ import { caregiverService } from '../services/caregiverService';
 import { locationService } from '../services/locationService';
 import { PatientLocation } from '../types/location';
 import { HomeLocationModal } from '../components/location/HomeLocationModal';
+import { PatientLiveLocationCard } from '../components/location/PatientLiveLocationCard';
 import { FamilyMember } from '../types/family';
+import { supabase } from '../lib/supabase';
 import {
   Sparkles,
   ArrowRight,
@@ -47,7 +49,7 @@ interface HomePageProps {
 }
 
 export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
-  const { currentUser } = useCurrentUser('home');
+  const { currentUser, isLoading: authLoading } = useCurrentUser('home');
   const { currentLang, t } = useLanguage();
 
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>(() =>
@@ -74,9 +76,23 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
   const [savingLocation, setSavingLocation] = useState<boolean>(false);
   const [locationToast, setLocationToast] = useState<string>('');
 
-  // Sync family members, assigned caregiver, and home location from database on mount
+  // Dedicated helper to fetch and sync caregiver status
+  const fetchAssignedCaregiver = async (patientId: string) => {
+    if (!patientId || patientId === 'guest') return;
+    setLoadingCaregiver(true);
+    try {
+      const cg = await caregiverService.getAssignedCaregiverForPatient(patientId);
+      setAssignedCaregiver(cg);
+    } catch (e) {
+      console.warn('[HomePage] Error checking assigned caregiver:', e);
+    } finally {
+      setLoadingCaregiver(false);
+    }
+  };
+
+  // Sync family members and home location from database on mount
   useEffect(() => {
-    if (!currentUser?.id) return;
+    if (!currentUser?.id || currentUser.id === 'guest') return;
     familyService.syncFamilyMembersFromDb(currentUser.id).then((members) => {
       if (members && members.length > 0) {
         setFamilyMembers(members);
@@ -85,13 +101,6 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
       }
     });
 
-    setLoadingCaregiver(true);
-    caregiverService
-      .getAssignedCaregiverForPatient(currentUser.id)
-      .then((cg) => setAssignedCaregiver(cg))
-      .catch((e) => console.warn('Error checking assigned caregiver:', e))
-      .finally(() => setLoadingCaregiver(false));
-
     setLoadingLocation(true);
     locationService
       .getPatientHomeLocation(currentUser.id)
@@ -99,6 +108,52 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
       .catch((e) => console.warn('Error loading patient home location:', e))
       .finally(() => setLoadingLocation(false));
   }, [currentUser?.id]);
+
+  // Dedicated useEffect for Caregiver linking with Realtime listener
+  useEffect(() => {
+    if (authLoading || !currentUser?.id || currentUser.id === 'guest') {
+      return;
+    }
+
+    // 1. Initial fetch
+    fetchAssignedCaregiver(currentUser.id);
+
+    // 2. Realtime listener on caregiver_patient for this patient
+    const channel = supabase
+      .channel(`patient_cg_link_${currentUser.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'caregiver_patient',
+          filter: `patient_id=eq.${currentUser.id}`,
+        },
+        (payload) => {
+          if (payload.eventType === 'DELETE') {
+            setAssignedCaregiver(null);
+          } else {
+            fetchAssignedCaregiver(currentUser.id);
+          }
+        }
+      )
+      .subscribe();
+
+    // 3. Re-verify on window focus / tab visibility change
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && currentUser.id !== 'guest') {
+        fetchAssignedCaregiver(currentUser.id);
+      }
+    };
+    window.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('focus', onVisibilityChange);
+
+    return () => {
+      supabase.removeChannel(channel);
+      window.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('focus', onVisibilityChange);
+    };
+  }, [currentUser?.id, authLoading]);
 
   const handleSetHomeLocation = async () => {
     if (!currentUser?.id) return;
@@ -410,7 +465,15 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
 
       {/* Caregiver Oversight Status Banner with Direct Unlink Option */}
       <div className="animate-fade-in">
-        {assignedCaregiver ? (
+        {loadingCaregiver ? (
+          <div className="bg-gray-50 border-2 border-gray-200 p-4 sm:p-5 rounded-3xl shadow-xs flex items-center gap-3.5 animate-pulse">
+            <div className="w-12 h-12 rounded-2xl bg-gray-200 shrink-0" />
+            <div className="space-y-2 flex-1">
+              <div className="h-4 bg-gray-200 rounded-md w-36" />
+              <div className="h-3 bg-gray-200 rounded-md w-64" />
+            </div>
+          </div>
+        ) : assignedCaregiver ? (
           <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 border-2 border-emerald-300 p-4 sm:p-5 rounded-3xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="flex items-center gap-3.5">
               <div className="relative shrink-0">
@@ -428,13 +491,13 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
               <div>
                 <div className="flex items-center gap-2">
                   <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-900 border border-emerald-300">
-                    🟢 Linked with Caregiver
+                    🟢 Caregiver: Connected
                   </span>
                 </div>
                 <div className="text-base font-extrabold text-gray-900 mt-0.5">
-                  {assignedCaregiver.name}
+                  Family Caregiver Connected: {assignedCaregiver.name}
                 </div>
-                <div className="text-xs text-gray-500 font-medium">
+                <div className="text-xs text-gray-600 font-medium">
                   {assignedCaregiver.email || assignedCaregiver.phone || 'Authorized Family Caregiver'}
                 </div>
               </div>
@@ -581,6 +644,14 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
           </div>
         </div>
       </div>
+
+      {/* Dedicated Patient Live Location Sharing Card */}
+      {assignedCaregiver && (
+        <PatientLiveLocationCard
+          patientId={currentUser.id}
+          caregiverName={assignedCaregiver.full_name || assignedCaregiver.name || 'Your Caregiver'}
+        />
+      )}
 
       {/* Top Grid: Personalized Recommendation & Streak/XP */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

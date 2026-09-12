@@ -17,48 +17,22 @@ export interface SupabaseStorageAdapter {
 }
 
 class TabStorageEngine implements SupabaseStorageAdapter {
-  private getRoleFromUrlOrStorage(): 'caregiver' | 'elderly' | 'clinician' | null {
-    const pathname = window.location.pathname || '';
-    if (pathname.includes('caregiver')) return 'caregiver';
-
-    const hash = window.location.hash || '';
-    if (hash.includes('/caregiver/')) return 'caregiver';
-    if (hash.includes('/patient/')) return 'elderly';
-    if (hash.includes('/doctor/')) return 'clinician';
-
-    const intended = sessionStorage.getItem('ms_intended_role') || localStorage.getItem('ms_pending_oauth_role');
-    if (intended === 'caregiver') return 'caregiver';
-    if (intended === 'elderly' || intended === 'patient') return 'elderly';
-    if (intended === 'clinician' || intended === 'doctor') return 'clinician';
-
-    return null;
-  }
-
   public getItem(key: string): string | null {
     try {
-      // 1. Try active tab session first
+      // 1. Try active tab's sessionStorage first
       const sessionVal = window.sessionStorage.getItem(key);
-      if (sessionVal) {
+      if (sessionVal !== null) {
         return sessionVal;
       }
 
-      // 2. Fallback to role-specific backup in localStorage if opening a new tab for a specific route
-      const role = this.getRoleFromUrlOrStorage();
-      if (role) {
-        const backupKey = `ms_${role}_auth_token`;
-        const backupVal = window.localStorage.getItem(backupKey);
-        if (backupVal) {
-          // Hydrate this tab's sessionStorage with the role's backup
-          window.sessionStorage.setItem(key, backupVal);
-          return backupVal;
-        }
-      }
-
-      // 3. Fallback to default localStorage key only if on root/landing/callback
-      const defaultVal = window.localStorage.getItem(key);
-      if (defaultVal) {
-        window.sessionStorage.setItem(key, defaultVal);
-        return defaultVal;
+      // 2. Fall back to localStorage for this exact key
+      const localVal = window.localStorage.getItem(key);
+      if (localVal !== null) {
+        // Sync to current tab's sessionStorage for fast retrieval
+        try {
+          window.sessionStorage.setItem(key, localVal);
+        } catch {}
+        return localVal;
       }
 
       return null;
@@ -69,26 +43,7 @@ class TabStorageEngine implements SupabaseStorageAdapter {
 
   public setItem(key: string, value: string): void {
     try {
-      // Always store in current tab's sessionStorage
       window.sessionStorage.setItem(key, value);
-
-      // Determine role from payload or context to store a role-scoped backup in localStorage
-      let detectedRole: string | null = this.getRoleFromUrlOrStorage();
-
-      try {
-        const parsed = JSON.parse(value);
-        if (parsed?.user?.user_metadata?.role) {
-          detectedRole = parsed.user.user_metadata.role;
-        }
-      } catch {
-        // Not JSON or no role in metadata
-      }
-
-      if (detectedRole) {
-        window.localStorage.setItem(`ms_${detectedRole}_auth_token`, value);
-      }
-
-      // Also keep standard key for OAuth redirect flow
       window.localStorage.setItem(key, value);
     } catch (e) {
       console.warn('[TabStorage] setItem warning:', e);
@@ -98,12 +53,6 @@ class TabStorageEngine implements SupabaseStorageAdapter {
   public removeItem(key: string): void {
     try {
       window.sessionStorage.removeItem(key);
-
-      const role = this.getRoleFromUrlOrStorage();
-      if (role) {
-        window.localStorage.removeItem(`ms_${role}_auth_token`);
-      }
-
       window.localStorage.removeItem(key);
     } catch (e) {
       console.warn('[TabStorage] removeItem warning:', e);

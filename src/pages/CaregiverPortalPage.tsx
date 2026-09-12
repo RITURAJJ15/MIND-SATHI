@@ -39,8 +39,11 @@ import {
   Eye,
   EyeOff,
   Gamepad2,
+  MapPin,
 } from 'lucide-react';
 import { GoogleSignInButton } from '../components/common/GoogleSignInButton';
+import { CaregiverLiveLocationModal } from '../components/location/CaregiverLiveLocationModal';
+import { supabase } from '../lib/supabase';
 
 export const CaregiverPortalPage: React.FC = () => {
   const { currentLang } = useLanguage();
@@ -139,6 +142,7 @@ export const CaregiverPortalPage: React.FC = () => {
   const [linkLoading, setLinkLoading] = useState(false);
   const [availablePatients, setAvailablePatients] = useState<any[]>([]);
   const [showLinkModal, setShowLinkModal] = useState(false);
+  const [showLiveLocationModal, setShowLiveLocationModal] = useState(false);
   const [isLoadingPatients, setIsLoadingPatients] = useState<boolean>(true);
   const [patientGameSessions, setPatientGameSessions] = useState<any[]>([]);
 
@@ -177,8 +181,38 @@ export const CaregiverPortalPage: React.FC = () => {
   };
 
   useEffect(() => {
-    if (isCaregiver && currentUser?.id) {
+    if (isCaregiver && currentUser?.id && currentUser.id !== 'guest') {
       refreshAssignedPatients(currentUser.id);
+
+      const channel = supabase
+        .channel(`caregiver_pt_link_${currentUser.id}`)
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'caregiver_patient',
+            filter: `caregiver_id=eq.${currentUser.id}`,
+          },
+          () => {
+            refreshAssignedPatients(currentUser.id);
+          }
+        )
+        .subscribe();
+
+      const onVisibilityChange = () => {
+        if (document.visibilityState === 'visible') {
+          refreshAssignedPatients(currentUser.id);
+        }
+      };
+      window.addEventListener('visibilitychange', onVisibilityChange);
+      window.addEventListener('focus', onVisibilityChange);
+
+      return () => {
+        supabase.removeChannel(channel);
+        window.removeEventListener('visibilitychange', onVisibilityChange);
+        window.removeEventListener('focus', onVisibilityChange);
+      };
     } else {
       setIsLoadingPatients(false);
     }
@@ -233,7 +267,7 @@ export const CaregiverPortalPage: React.FC = () => {
       return;
     }
     if (!patientIdentifier.trim()) {
-      setLinkError('Please enter a patient email address or connection code.');
+      setLinkError('Please enter the patient\'s registered email address.');
       return;
     }
     setLinkError('');
@@ -785,6 +819,15 @@ export const CaregiverPortalPage: React.FC = () => {
           <div className="flex items-center gap-2">
             <button
               type="button"
+              onClick={() => setShowLiveLocationModal(true)}
+              className="text-xs font-extrabold text-emerald-800 hover:text-emerald-900 bg-emerald-100 hover:bg-emerald-200/80 px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 border border-emerald-300 shadow-xs active:scale-98"
+            >
+              <MapPin className="w-3.5 h-3.5 text-emerald-700" />
+              <span>See Live Location</span>
+            </button>
+
+            <button
+              type="button"
               onClick={handleDisconnectPatient}
               disabled={linkLoading}
               className="text-xs font-bold text-rose-700 hover:text-rose-800 bg-rose-50 hover:bg-rose-100 px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 border border-rose-200"
@@ -1228,7 +1271,7 @@ export const CaregiverPortalPage: React.FC = () => {
             >
               <div>
                 <label className="block text-xs font-bold text-gray-700 mb-1">
-                  Patient's Connection Code or Google Email
+                  Patient's Registered Email or Identifier
                 </label>
                 <div className="relative">
                   <LinkIcon className="w-4 h-4 text-gray-400 absolute left-3 top-3" />
@@ -1237,12 +1280,12 @@ export const CaregiverPortalPage: React.FC = () => {
                     required
                     value={patientIdentifier}
                     onChange={(e) => setPatientIdentifier(e.target.value)}
-                    placeholder="e.g. MS-1A2B3C or senior@gmail.com"
-                    className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-9 pr-4 py-2.5 text-xs font-semibold uppercase placeholder:normal-case focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    placeholder="e.g. senior@gmail.com or patient UUID"
+                    className="w-full bg-gray-50 border border-gray-300 rounded-xl pl-9 pr-4 py-2.5 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
                 <p className="text-[11px] text-gray-500 mt-1">
-                  💡 Found on the patient's MIND SATHI Home Screen banner (e.g. <strong>MS-XXXXXX</strong>) or registered Google email.
+                  💡 Enter the registered email of the senior patient (e.g. <strong>senior@gmail.com</strong>).
                 </p>
               </div>
 
@@ -1266,6 +1309,16 @@ export const CaregiverPortalPage: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Live Location Modal for Caregiver */}
+      {showLiveLocationModal && selectedPatient && (
+        <CaregiverLiveLocationModal
+          isOpen={showLiveLocationModal}
+          onClose={() => setShowLiveLocationModal(false)}
+          patientId={selectedPatient.id}
+          patientName={selectedPatient.full_name || selectedPatient.name || 'Patient'}
+        />
       )}
     </div>
   );

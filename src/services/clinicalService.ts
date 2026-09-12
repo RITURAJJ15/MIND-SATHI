@@ -66,11 +66,13 @@ class ClinicalService {
 
       // 2. Query Supabase profiles
       if (!targetPatient) {
-        // By Connection Code
+        // By Connection Code (stored in secondary_language or matches format)
+        const cleanUpper = cleanInput.toUpperCase();
+        const codeQuery = cleanUpper.startsWith('MS-') ? cleanUpper : `MS-${cleanUpper}`;
         const { data: byCode } = await supabase
           .from('profiles')
           .select('*')
-          .ilike('connection_code', cleanInput)
+          .ilike('secondary_language', codeQuery)
           .maybeSingle();
 
         if (byCode && (byCode.role === 'elderly' || byCode.role === 'patient') && !byCode.id.startsWith('elder-')) {
@@ -101,7 +103,7 @@ class ClinicalService {
             createdAt: byCode.created_at || new Date().toISOString(),
             email: byCode.email || '',
             phone: byCode.phone || '',
-            connectionCode: byCode.connection_code,
+            connectionCode: byCode.secondary_language || ('MS-' + byCode.id.replace(/-/g, '').substring(0, 6).toUpperCase()),
           };
         }
 
@@ -141,7 +143,7 @@ class ClinicalService {
               createdAt: byEmail.created_at || new Date().toISOString(),
               email: byEmail.email || '',
               phone: byEmail.phone || '',
-              connectionCode: byEmail.connection_code,
+              connectionCode: byEmail.secondary_language || ('MS-' + byEmail.id.replace(/-/g, '').substring(0, 6).toUpperCase()),
             };
           }
         }
@@ -243,7 +245,7 @@ class ClinicalService {
                   createdAt: ptRow.created_at || new Date().toISOString(),
                   email: ptRow.email || '',
                   phone: ptRow.phone || '',
-                  connectionCode: ptRow.connection_code,
+                  connectionCode: ptRow.secondary_language || ('MS-' + ptRow.id.replace(/-/g, '').substring(0, 6).toUpperCase()),
                 };
                 patientsMap.set(mapped.id, mapped);
               }
@@ -321,7 +323,7 @@ class ClinicalService {
               createdAt: row.created_at || new Date().toISOString(),
               email: row.email || '',
               phone: row.phone || '',
-              connectionCode: row.connection_code,
+              connectionCode: row.secondary_language || ('MS-' + row.id.replace(/-/g, '').substring(0, 6).toUpperCase()),
             };
             patientsMap.set(mapped.id, mapped);
           }
