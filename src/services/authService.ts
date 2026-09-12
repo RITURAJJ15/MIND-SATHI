@@ -20,6 +20,7 @@ import { offlineDb } from '../lib/offlineDb';
 import { familyService } from './familyService';
 import { tabStorage } from '../lib/tabStorage';
 import { centralSyncService } from './centralSyncService';
+import { syncService } from './syncService';
 
 const SK_SESSION = 'ms_auth_session';
 const SK_PATIENT_PROFILE = 'ms_active_patient_profile';
@@ -1722,7 +1723,7 @@ class AuthService {
     offlineDb.profiles.put(updated).catch(() => {});
 
     if (updated.id.includes('-') && updated.id.length > 20) {
-      supabase.from('profiles').upsert({
+      const dbPayload = {
         id: updated.id,
         email: updated.email,
         full_name: updated.name,
@@ -1748,9 +1749,24 @@ class AuthService {
         level: updated.level,
         level_title: updated.levelTitle,
         updated_at: new Date().toISOString(),
-      }).then(({ error }) => {
-        if (error) console.warn('[AuthService] Profile update error:', error.message);
-      });
+      };
+
+      // Queue durable mutation in Dexie for offline-first guarantee
+      syncService.recordMutation({
+        userId: updated.id,
+        patientId: updated.id,
+        entityType: 'profile',
+        entityId: updated.id,
+        operation: 'upsert',
+        payload: dbPayload,
+        idempotencyKey: `${updated.id}_profile_update`,
+      }).catch((e) => console.warn('[AuthService] Profile mutation queue note:', e));
+
+      if (typeof navigator !== 'undefined' && navigator.onLine) {
+        supabase.from('profiles').upsert(dbPayload).then(({ error }) => {
+          if (error) console.warn('[AuthService] Profile update error:', error.message);
+        });
+      }
     }
 
     this.notifyListeners();

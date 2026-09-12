@@ -4,6 +4,7 @@ import { speechService } from './speechService';
 import { authService } from './authService';
 import { supabase } from '../lib/supabase';
 import { offlineDb } from '../lib/offlineDb';
+import { syncService } from './syncService';
 
 const STORAGE_KEY_REMINDERS = 'mind_sathi_reminders';
 
@@ -99,15 +100,28 @@ class ReminderService {
     if (r) {
       r.enabled = !r.enabled;
       localStorage.setItem(STORAGE_KEY_REMINDERS, JSON.stringify(this.reminders));
+      offlineDb.reminders.put({ ...r, syncStatus: 'pending' }).catch(() => {});
 
-      if (id.includes('-') && id.length > 20) {
-        supabase
-          .from('reminders')
-          .update({ is_completed: !r.enabled, updated_at: new Date().toISOString() })
-          .eq('id', id)
-          .then(({ error }) => {
-            if (error) console.warn('[ReminderService] Supabase toggle error:', error.message);
-          });
+      if (id.includes('-') && id.length > 20 && r.userId) {
+        syncService.recordMutation({
+          userId: r.userId,
+          patientId: r.userId,
+          entityType: 'reminder',
+          entityId: id,
+          operation: 'update',
+          payload: { isCompleted: !r.enabled },
+          idempotencyKey: `${r.userId}_reminder_${id}_toggle`,
+        }).catch((e) => console.warn('[ReminderService] Mutation queue note:', e));
+
+        if (typeof navigator !== 'undefined' && navigator.onLine) {
+          supabase
+            .from('reminders')
+            .update({ is_completed: !r.enabled, updated_at: new Date().toISOString() })
+            .eq('id', id)
+            .then(({ error }) => {
+              if (error) console.warn('[ReminderService] Supabase toggle error:', error.message);
+            });
+        }
       }
       return r.enabled;
     }
@@ -119,15 +133,28 @@ class ReminderService {
     if (r) {
       r.isCompletedToday = !r.isCompletedToday;
       localStorage.setItem(STORAGE_KEY_REMINDERS, JSON.stringify(this.reminders));
+      offlineDb.reminders.put({ ...r, syncStatus: 'pending' }).catch(() => {});
 
-      if (id.includes('-') && id.length > 20) {
-        supabase
-          .from('reminders')
-          .update({ is_completed: r.isCompletedToday, updated_at: new Date().toISOString() })
-          .eq('id', id)
-          .then(({ error }) => {
-            if (error) console.warn('[ReminderService] Supabase markCompleted error:', error.message);
-          });
+      if (id.includes('-') && id.length > 20 && r.userId) {
+        syncService.recordMutation({
+          userId: r.userId,
+          patientId: r.userId,
+          entityType: 'reminder',
+          entityId: id,
+          operation: 'update',
+          payload: { isCompletedToday: r.isCompletedToday },
+          idempotencyKey: `${r.userId}_reminder_${id}_completed`,
+        }).catch((e) => console.warn('[ReminderService] Mutation queue note:', e));
+
+        if (typeof navigator !== 'undefined' && navigator.onLine) {
+          supabase
+            .from('reminders')
+            .update({ is_completed: r.isCompletedToday, updated_at: new Date().toISOString() })
+            .eq('id', id)
+            .then(({ error }) => {
+              if (error) console.warn('[ReminderService] Supabase markCompleted error:', error.message);
+            });
+        }
       }
       return r.isCompletedToday;
     }
@@ -136,18 +163,32 @@ class ReminderService {
 
   public deleteReminder(id: string): boolean {
     const initLen = this.reminders.length;
+    const target = this.reminders.find((r) => r.id === id);
     this.reminders = this.reminders.filter((r) => r.id !== id);
     if (this.reminders.length !== initLen) {
       localStorage.setItem(STORAGE_KEY_REMINDERS, JSON.stringify(this.reminders));
+      offlineDb.reminders.delete(id).catch(() => {});
 
-      if (id.includes('-') && id.length > 20) {
-        supabase
-          .from('reminders')
-          .delete()
-          .eq('id', id)
-          .then(({ error }) => {
-            if (error) console.warn('[ReminderService] Supabase delete error:', error.message);
-          });
+      if (id.includes('-') && id.length > 20 && target?.userId) {
+        syncService.recordMutation({
+          userId: target.userId,
+          patientId: target.userId,
+          entityType: 'reminder',
+          entityId: id,
+          operation: 'delete',
+          payload: { id },
+          idempotencyKey: `${target.userId}_reminder_${id}_delete`,
+        }).catch((e) => console.warn('[ReminderService] Mutation queue note:', e));
+
+        if (typeof navigator !== 'undefined' && navigator.onLine) {
+          supabase
+            .from('reminders')
+            .delete()
+            .eq('id', id)
+            .then(({ error }) => {
+              if (error) console.warn('[ReminderService] Supabase delete error:', error.message);
+            });
+        }
       }
       return true;
     }

@@ -55,29 +55,29 @@ export const SyncStatusIndicator: React.FC = () => {
       case 'online-synced':
         return {
           icon: <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />,
-          label: 'Online — Data Synced',
-          shortLabel: 'Synced',
+          label: syncInfo.pendingCount > 0 ? `Syncing (${syncInfo.pendingCount} pending)...` : 'Online — Data Synced',
+          shortLabel: syncInfo.pendingCount > 0 ? 'Syncing...' : 'Synced',
           containerClass: 'bg-emerald-50 text-emerald-900 border-emerald-300 hover:bg-emerald-100',
         };
       case 'offline':
         return {
           icon: <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0" />,
-          label: 'Offline — Data Saved Locally',
+          label: syncInfo.pendingCount > 0 ? `Offline — ${syncInfo.pendingCount} change(s) saved on this device` : 'Offline — changes saved on this device',
           shortLabel: syncInfo.pendingCount > 0 ? `Offline (${syncInfo.pendingCount})` : 'Offline',
           containerClass: 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100',
         };
       case 'syncing':
         return {
           icon: <RefreshCw className="w-3.5 h-3.5 text-blue-600 animate-spin shrink-0" />,
-          label: 'Syncing Data...',
+          label: syncInfo.pendingCount > 0 ? `Syncing... (${syncInfo.pendingCount} waiting)` : 'Syncing Data...',
           shortLabel: 'Syncing...',
           containerClass: 'bg-blue-50 text-blue-900 border-blue-300 hover:bg-blue-100',
         };
       case 'sync-failed':
         return {
           icon: <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping shrink-0" />,
-          label: 'Sync Failed — Retry',
-          shortLabel: 'Sync Failed',
+          label: "Some changes couldn't sync yet. We'll retry.",
+          shortLabel: 'Retry Sync',
           containerClass: 'bg-rose-50 text-rose-900 border-rose-300 hover:bg-rose-100',
         };
     }

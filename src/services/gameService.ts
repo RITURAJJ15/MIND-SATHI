@@ -131,15 +131,24 @@ class GameService {
     offlineDb.gameSessions.put({
       ...newSession,
       syncStatus: 'pending',
-    }).then(() => {
-      // If online, immediately trigger sync to Supabase
-      if (typeof navigator !== 'undefined' && navigator.onLine) {
-        syncService.syncPendingData().catch((err) => {
-          console.warn('[GameService] Sync notice:', err);
-        });
-      }
     }).catch((dexieErr) => {
       console.warn('[GameService] Dexie write warning:', dexieErr);
+    });
+
+    // Record durable mutation in Dexie offlineMutations queue
+    syncService.recordMutation({
+      userId: user.id,
+      patientId: user.id,
+      entityType: 'game_session',
+      entityId: newSession.id,
+      operation: 'insert',
+      payload: {
+        ...newSession,
+        localSessionId: newSession.id,
+      },
+      idempotencyKey: `${user.id}_game_session_${newSession.id}_insert`,
+    }).catch((mutErr) => {
+      console.warn('[GameService] Mutation queue note:', mutErr);
     });
 
     // Award XP and check level

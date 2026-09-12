@@ -5,6 +5,8 @@ import { supabase } from '../lib/supabase';
 import { authService } from './authService';
 import { profileService } from './profileService';
 import { soundService } from './soundService';
+import { offlineDb } from '../lib/offlineDb';
+import { syncService } from './syncService';
 
 const STORAGE_KEY_PLANS = 'mind_sathi_daily_plans';
 const STORAGE_KEY_SESSIONS = 'mind_sathi_game_sessions';
@@ -1583,79 +1585,118 @@ class DailyPlanService {
     all[userId][dateStr] = storedData;
     this.saveAllStoredPlans(all);
 
-    // Save to Supabase
+    const updatedTasks = currentPlan.tasks.map((t) => ({
+      ...t,
+      completed: updatedIds.includes(t.id),
+      completedAt: updatedIds.includes(t.id) ? (t.completedAt || new Date().toISOString()) : undefined,
+    }));
+
+    // 1. Persistent offline save: Dexie dailyPlans table
+    offlineDb.dailyPlans.put({
+      patientIdAndDate: `${userId}_${dateStr}`,
+      patientId: userId,
+      planDate: dateStr,
+      completedTaskIds: updatedIds,
+      earnedXp,
+      isAllCompleted,
+      lastUpdated: storedData.lastUpdated,
+      syncStatus: 'pending',
+    }).catch((dexieErr) => {
+      console.warn('[DailyPlanService] Dexie plan write note:', dexieErr);
+    });
+
+    // 2. Queue durable offline mutation for Supabase auto-sync with idempotency key
     const isRealUser = userId.includes('-') && userId.length > 20;
     if (isRealUser) {
-      try {
-        const updatedTasks = currentPlan.tasks.map((t) => ({
-          ...t,
-          completed: updatedIds.includes(t.id),
-          completedAt: updatedIds.includes(t.id) ? (t.completedAt || new Date().toISOString()) : undefined,
-        }));
+      syncService.recordMutation({
+        userId,
+        patientId: userId,
+        entityType: 'daily_plan',
+        entityId: `${userId}_${dateStr}`,
+        operation: 'upsert',
+        payload: {
+          planDate: dateStr,
+          completedTaskIds: updatedIds,
+          earnedXp,
+          isAllCompleted,
+          tasks: updatedTasks,
+        },
+        idempotencyKey: `${userId}_daily_plan_${dateStr}`,
+      }).catch((mutErr) => {
+        console.warn('[DailyPlanService] Mutation queue note:', mutErr);
+      });
 
-        // 1. Update daily_patient_plans table
-        await supabase
-          .from('daily_patient_plans')
-          .update({
-            tasks: updatedTasks,
-            earned_xp: earnedXp,
-            is_all_completed: isAllCompleted,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('patient_id', userId)
-          .eq('plan_date', dateStr);
+      // Immediate attempt if online
+      if (typeof navigator !== 'undefined' && navigator.onLine) {
+        try {
+          // Update daily_patient_plans table
+          supabase
+            .from('daily_patient_plans')
+            .upsert({
+              patient_id: userId,
+              plan_date: dateStr,
+              tasks: updatedTasks,
+              earned_xp: earnedXp,
+              is_all_completed: isAllCompleted,
+              updated_at: new Date().toISOString(),
+            }, { onConflict: 'patient_id,plan_date' })
+            .then(({ error }) => {
+              if (error) console.warn('[DailyPlanService] Plan upsert note:', error.message);
+            });
 
-        // 2. Also update profiles.accessibility.daily_plans for backwards compatibility
-        const currentUser = authService.getCurrentUser();
-        const defaultAcc: AccessibilitySettings = {
-          fontSize: 'normal',
-          highContrast: false,
-          textToSpeechAuto: false,
-          soundEffects: true,
-          speechRate: 0.85,
-        };
-        const currentAccessibility = currentUser?.accessibility || defaultAcc;
-        const currentDailyPlans = currentAccessibility.daily_plans || {};
+          // Also update profiles.accessibility.daily_plans for backwards compatibility
+          const currentUser = authService.getCurrentUser();
+          const defaultAcc: AccessibilitySettings = {
+            fontSize: 'normal',
+            highContrast: false,
+            textToSpeechAuto: false,
+            soundEffects: true,
+            speechRate: 0.85,
+          };
+          const currentAccessibility = currentUser?.accessibility || defaultAcc;
+          const currentDailyPlans = currentAccessibility.daily_plans || {};
 
-        const updatedAccessibility = {
-          ...defaultAcc,
-          ...currentAccessibility,
-          daily_plans: {
-            ...currentDailyPlans,
-            [dateStr]: storedData,
-          },
-        };
-
-        await supabase
-          .from('profiles')
-          .update({
-            accessibility: updatedAccessibility,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', userId);
-
-        authService.updateCurrentUserProfile({
-          accessibility: updatedAccessibility,
-        });
-
-        // 3. Log completion in game_sessions table
-        if (nextState) {
-          await supabase.from('game_sessions').insert({
-            patient_id: userId,
-            game_id: targetTask.gameId || `daily_task_${targetTask.type}`,
-            score: 100,
-            accuracy: 100,
-            duration_seconds: (targetTask.durationMinutes || 5) * 60,
-            metadata: {
-              taskId: targetTask.id,
-              taskTitle: targetTask.title.en,
-              rewardXp: targetTask.rewardXp,
-              completedAt: new Date().toISOString(),
+          const updatedAccessibility = {
+            ...defaultAcc,
+            ...currentAccessibility,
+            daily_plans: {
+              ...currentDailyPlans,
+              [dateStr]: storedData,
             },
-          });
+          };
+
+          supabase
+            .from('profiles')
+            .update({
+              accessibility: updatedAccessibility,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', userId)
+            .then(() => {
+              authService.updateCurrentUserProfile({
+                accessibility: updatedAccessibility,
+              });
+            });
+
+          // Log completion in game_sessions table
+          if (nextState) {
+            supabase.from('game_sessions').insert({
+              patient_id: userId,
+              game_id: targetTask.gameId || `daily_task_${targetTask.type}`,
+              score: 100,
+              accuracy: 100,
+              duration_seconds: (targetTask.durationMinutes || 5) * 60,
+              metadata: {
+                taskId: targetTask.id,
+                taskTitle: targetTask.title.en,
+                rewardXp: targetTask.rewardXp,
+                completedAt: new Date().toISOString(),
+              },
+            }).then(() => {});
+          }
+        } catch (err) {
+          console.warn('[DailyPlanService] Supabase task persistence error:', err);
         }
-      } catch (err) {
-        console.warn('[DailyPlanService] Supabase task persistence error:', err);
       }
     }
 

@@ -4,7 +4,7 @@ import { UserProfile } from '../types/user';
 import { FamilyMember } from '../types/family';
 import { Reminder } from '../types/reminder';
 
-export type SyncStatus = 'pending' | 'synced' | 'failed';
+export type SyncStatus = 'pending' | 'syncing' | 'synced' | 'failed';
 
 export interface OfflineGameSession extends GameSession {
   syncStatus: SyncStatus;
@@ -24,7 +24,7 @@ export interface OfflineReminder extends Reminder {
 
 export interface SyncQueueItem {
   id?: number;
-  type: 'game_session' | 'profile_update' | 'reminder_toggle' | 'family_member';
+  type: 'game_session' | 'profile_update' | 'reminder_toggle' | 'family_member' | 'daily_plan' | 'xp_progress';
   entityId: string;
   payload: any;
   timestamp: string;
@@ -38,6 +38,33 @@ export interface SyncMetadataItem {
   value: any;
 }
 
+export interface OfflineMutation {
+  id: string;
+  userId?: string;
+  patientId: string;
+  entityType: 'game_session' | 'daily_plan' | 'xp_progress' | 'reminder' | 'profile' | 'family_member';
+  entityId: string;
+  operation: 'insert' | 'update' | 'upsert' | 'delete';
+  payload: any;
+  createdAt: string;
+  updatedAt: string;
+  retryCount: number;
+  status: SyncStatus;
+  lastError?: string;
+  idempotencyKey: string;
+}
+
+export interface OfflineDailyPlan {
+  patientIdAndDate: string; // Composite key: `${patientId}_${planDate}`
+  patientId: string;
+  planDate: string;
+  completedTaskIds: string[];
+  earnedXp: number;
+  isAllCompleted: boolean;
+  lastUpdated: string;
+  syncStatus: SyncStatus;
+}
+
 export class MindSathiOfflineDB extends Dexie {
   profiles!: Table<UserProfile, string>;
   gameSessions!: Table<OfflineGameSession, string>;
@@ -45,6 +72,8 @@ export class MindSathiOfflineDB extends Dexie {
   reminders!: Table<OfflineReminder, string>;
   syncQueue!: Table<SyncQueueItem, number>;
   syncMetadata!: Table<SyncMetadataItem, string>;
+  offlineMutations!: Table<OfflineMutation, string>;
+  dailyPlans!: Table<OfflineDailyPlan, string>;
 
   constructor() {
     super('MindSathiOfflineDB');
@@ -57,7 +86,19 @@ export class MindSathiOfflineDB extends Dexie {
       syncQueue: '++id, type, entityId, status, timestamp, retryCount',
       syncMetadata: 'key',
     });
+
+    this.version(2).stores({
+      profiles: 'id, role, email, phone, updatedAt',
+      gameSessions: 'id, userId, gameId, score, accuracy, timestamp, syncStatus',
+      familyMembers: 'id, userId, name, relationship, syncStatus',
+      reminders: 'id, userId, time, syncStatus',
+      syncQueue: '++id, type, entityId, status, timestamp, retryCount',
+      syncMetadata: 'key',
+      offlineMutations: 'id, patientId, entityType, entityId, operation, status, idempotencyKey, createdAt',
+      dailyPlans: 'patientIdAndDate, patientId, planDate, lastUpdated, syncStatus',
+    });
   }
 }
 
 export const offlineDb = new MindSathiOfflineDB();
+

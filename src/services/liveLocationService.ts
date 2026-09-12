@@ -37,6 +37,10 @@ class LiveLocationService {
    * Caregiver initiates a live location request to the connected patient.
    */
   public async requestLiveLocation(patientId: string): Promise<{ success: boolean; session?: LiveLocationSession; error?: string }> {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return { success: false, error: 'Live location unavailable while offline.' };
+    }
+
     if (!patientId) {
       return { success: false, error: 'Patient ID is required.' };
     }
@@ -110,6 +114,10 @@ class LiveLocationService {
    * Patient initiates live location sharing with their connected caregiver.
    */
   public async patientStartSharing(): Promise<{ success: boolean; session?: LiveLocationSession; error?: string }> {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return { success: false, error: 'Live location unavailable while offline.' };
+    }
+
     const { data: { session } } = await supabase.auth.getSession();
     if (!session || !session.user) {
       return { success: false, error: 'Authentication required. Please sign in.' };

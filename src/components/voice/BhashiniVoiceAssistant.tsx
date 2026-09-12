@@ -115,6 +115,20 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
     setErrorMessage('');
     setRecordingSeconds(0);
 
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      const offlineMsg =
+        selectedLanguage === 'hi'
+          ? "वॉइस एआई के लिए इंटरनेट कनेक्शन आवश्यक है। आपकी सहेजी गई प्रगति सुरक्षित है और वापस ऑनलाइन होने पर स्वचालित रूप से सिंक हो जाएगी।"
+          : selectedLanguage === 'as'
+          ? "ভইচ এআইৰ বাবে ইণ্টাৰনেট সংযোগৰ প্ৰয়োজন। আপোনাৰ সঞ্চিত অগ্ৰগতি সুৰক্ষিত আছে আৰু পুনৰ অনলাইন হ'লে স্বয়ংক্ৰিয়ভাৱে ছিংক হ'ব।"
+          : selectedLanguage === 'bn'
+          ? "ভয়েস এআই-এর জন্য ইন্টারনেট সংযোগ প্রয়োজন। আপনার সংরক্ষিত অগ্রগতি সুরক্ষিত রয়েছে এবং অনলাইনে ফিরলে স্বয়ংক্রিয়ভাবে সিঙ্ক হবে।"
+          : "Voice AI needs an internet connection. Your saved progress is safe and will sync automatically when you're back online.";
+      setErrorMessage(offlineMsg);
+      setVoiceState('ERROR');
+      return;
+    }
+
     try {
       await bhashiniVoiceService.startRecording(selectedLanguage);
       setVoiceState('LISTENING');
@@ -187,6 +201,21 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
   // Complete Multilingual Conversation Pipeline: NMT -> Gemini -> NMT -> TTS
   const processPatientAIQuery = async (originalQueryText: string) => {
     if (isProcessingRef.current) return;
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      const offlineMsg =
+        selectedLanguage === 'hi'
+          ? "वॉइस एआई के लिए इंटरनेट कनेक्शन आवश्यक है। आपकी सहेजी गई प्रगति सुरक्षित है और वापस ऑनलाइन होने पर स्वचालित रूप से सिंक हो जाएगी।"
+          : selectedLanguage === 'as'
+          ? "ভইচ এআইৰ বাবে ইণ্টাৰনেট সংযোগৰ প্ৰয়োজন। আপোনাৰ সঞ্চিত অগ্ৰগতি সুৰক্ষিত আছে আৰু পুনৰ অনলাইন হ'লে স্বয়ংক্ৰিয়ভাৱে ছিংক হ'ব।"
+          : selectedLanguage === 'bn'
+          ? "ভয়েস এআই-এর জন্য ইন্টারনেট সংযোগ প্রয়োজন। আপনার সংরক্ষিত অগ্রগতি সুরক্ষিত রয়েছে এবং অনলাইনে ফিরলে স্বয়ংক্রিয়ভাবে সিঙ্ক হবে।"
+          : "Voice AI needs an internet connection. Your saved progress is safe and will sync automatically when you're back online.";
+      setErrorMessage(offlineMsg);
+      setVoiceState('ERROR');
+      return;
+    }
+
     isProcessingRef.current = true;
     setErrorMessage('');
 
