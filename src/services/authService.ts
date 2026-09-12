@@ -511,7 +511,7 @@ class AuthService {
   public async signInCaregiverWithEmail(
     email: string,
     password: string
-  ): Promise<{ success: boolean; error?: string; profile?: UserProfile }> {
+  ): Promise<{ success: boolean; error?: string; isUnconfirmed?: boolean; profile?: UserProfile }> {
     const cleanEmail = (email || '').trim().toLowerCase();
     if (!cleanEmail || !password) {
       return { success: false, error: 'Email and password are required.' };
@@ -531,7 +531,15 @@ class AuthService {
       });
 
       if (signInErr) {
-        // Return actual Supabase error directly (e.g. "Invalid login credentials", "Email not confirmed")
+        const errMsg = (signInErr.message || '').toLowerCase();
+        if (errMsg.includes('email not confirmed')) {
+          return {
+            success: false,
+            isUnconfirmed: true,
+            error: 'Your email address has not been confirmed yet. Please check your inbox or request a new confirmation email.',
+          };
+        }
+        // Return actual Supabase error directly (e.g. "Invalid login credentials")
         return { success: false, error: signInErr.message };
       }
 
