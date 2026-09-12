@@ -165,6 +165,8 @@ class GeminiService {
   public async chatWithMemoryAssistant(params: {
     userId: string;
     message: string;
+    originalMessage?: string;
+    originalLanguage?: string;
     history: { role: 'user' | 'assistant'; content: string }[];
     userProfile: UserProfile | null;
     familyMembers: FamilyMember[];
@@ -177,6 +179,8 @@ class GeminiService {
     const {
       userId,
       message,
+      originalMessage,
+      originalLanguage,
       history,
       userProfile,
       familyMembers,
@@ -208,7 +212,7 @@ class GeminiService {
           user_id: userId,
           session_id: sessionId,
           role: 'user',
-          message: message,
+          message: originalMessage || message,
         });
       } catch (err) {
         console.warn('[GeminiService] Error storing user message in ai_conversations:', err);
@@ -216,74 +220,82 @@ class GeminiService {
     }
 
     // 2. Call backend Gemini endpoint grounded in real data
-    try {
-      const response = await fetch('/api/gemini/assistant', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          message,
-          history,
-          userProfile: {
-            name: userProfile?.name,
-            preferredName: userProfile?.preferredName,
-            age: userProfile?.age,
-            city: userProfile?.city,
-            state: userProfile?.state,
-            isAyushmanMember: userProfile?.isAyushmanMember,
-            abhaId: userProfile?.abhaId,
-          },
-          familyMembers: familyMembers.map((f) => ({
-            name: f.name,
-            relationship: f.relationship,
-            phone: f.phone,
-            isFavorite: f.isFavorite,
-          })),
-          reminders: reminders.map((r) => ({
-            title: r.title,
-            time: r.time,
-            type: r.type,
-            dosageOrDetail: r.dosageOrDetail,
-            isCompletedToday: r.isCompletedToday,
-          })),
-          dailyPlanTasks,
-          caregiverName,
-          language,
-        }),
-      });
+    const response = await fetch('/api/gemini/assistant', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        message,
+        originalMessage: originalMessage || message,
+        originalLanguage: originalLanguage || language,
+        history,
+        userProfile: {
+          name: userProfile?.name,
+          preferredName: userProfile?.preferredName,
+          age: userProfile?.age,
+          city: userProfile?.city,
+          state: userProfile?.state,
+          isAyushmanMember: userProfile?.isAyushmanMember,
+          abhaId: userProfile?.abhaId,
+        },
+        familyMembers: familyMembers.map((f) => ({
+          name: f.name,
+          relationship: f.relationship,
+          phone: f.phone,
+          isFavorite: f.isFavorite,
+        })),
+        reminders: reminders.map((r) => ({
+          title: r.title,
+          time: r.time,
+          type: r.type,
+          dosageOrDetail: r.dosageOrDetail,
+          isCompletedToday: r.isCompletedToday,
+        })),
+        dailyPlanTasks,
+        caregiverName,
+        language,
+      }),
+    });
 
-      if (response.ok) {
-        const data = await response.json();
-        const reply = data.reply || 'Namaste! How may I assist your day?';
-
-        // 3. Persist assistant reply to Supabase ai_conversations
-        if (userId && userId.includes('-') && userId.length > 20) {
-          try {
-            await supabase.from('ai_conversations').insert({
-              user_id: userId,
-              session_id: sessionId,
-              role: 'assistant',
-              message: reply,
-            });
-          } catch (err) {
-            console.warn('[GeminiService] Error storing assistant message in ai_conversations:', err);
-          }
-        }
-
-        return reply;
+    if (response.ok) {
+      const rawText = await response.text();
+      let data: any = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        const parseErr = new Error('GEMINI_ERROR') as any;
+        parseErr.code = 'GEMINI_ERROR';
+        throw parseErr;
       }
-    } catch (err) {
-      console.warn('[GeminiService] /api/gemini/assistant error:', err);
+
+      const reply = (data?.reply || data?.text || '').trim();
+      if (!reply) {
+        const emptyErr = new Error('GEMINI_EMPTY_RESPONSE') as any;
+        emptyErr.code = 'GEMINI_EMPTY_RESPONSE';
+        throw emptyErr;
+      }
+
+      // 3. Persist assistant reply to Supabase ai_conversations
+      if (userId && userId.includes('-') && userId.length > 20) {
+        try {
+          await supabase.from('ai_conversations').insert({
+            user_id: userId,
+            session_id: sessionId,
+            role: 'assistant',
+            message: reply,
+          });
+        } catch (err) {
+          console.warn('[GeminiService] Error storing assistant message in ai_conversations:', err);
+        }
+      }
+
+      return reply;
+    } else {
+      const errorData = await response.json().catch(() => null);
+      const errCode = errorData?.error || 'GEMINI_ERROR';
+      const err = new Error(errCode) as any;
+      err.code = errCode;
+      throw err;
     }
-
-    // Fallback grounded answer
-    const localizedFallbacks: Record<string, string> = {
-      as: 'নমস্কাৰ! 🙏 মই আপোনাৰ মাইণ্ড সাৰথি AI। মই আপোনাৰ লগত আছোঁ। আপোনাৰ পৰিয়াল, দৰব বা খেলৰ বিষয়ে কিবা জানিব বিচাৰে নেকি?',
-      bn: 'নমস্কার! 🙏 আমি আপনার মাইন্ড সাথী AI। আমি আপনার সাথেই আছি। আপনার পরিবার, ওষুধ বা খেলা সম্পর্কে কিছু জানতে চান?',
-      hi: 'नमस्ते! 🙏 मैं आपका माइंड साथी AI हूँ। मैं आपके साथ हूँ। आज मैं आपकी दवाओं, परिवार या दिमागी खेल में क्या सहायता करूँ?',
-      en: 'Namaste! 🙏 I am your MIND SATHI companion. Your family details, daily tasks, and reminders are safely loaded. How may I support you today?',
-    };
-
-    return localizedFallbacks[language] || localizedFallbacks.en;
   }
 
   /**

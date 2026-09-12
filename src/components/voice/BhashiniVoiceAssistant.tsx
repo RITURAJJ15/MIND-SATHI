@@ -1,23 +1,37 @@
+/**
+ * src/components/voice/BhashiniVoiceAssistant.tsx
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Complete Multilingual Voice Assistant Dialog for MIND SATHI.
+ * Full Pipeline:
+ * [ASR] -> [NMT native->en] -> [GEMINI English] -> [NMT en->native] -> [TTS native voice]
+ */
+
 import React, { useState, useEffect, useRef } from 'react';
-import { useCurrentUser } from '../../hooks/useCurrentUser';
-import { useLanguage } from '../../hooks/useLanguage';
-import { VoiceLanguage, VOICE_LANGUAGES, VoiceState, VOICE_ERROR_MESSAGES } from '../../types/voice';
+import {
+  Mic,
+  Square,
+  Volume2,
+  AlertCircle,
+  Loader2,
+  Sparkles,
+  Globe,
+  X,
+} from 'lucide-react';
+import {
+  VoiceLanguage,
+  VoiceState,
+  VOICE_LANGUAGES,
+  VOICE_ERROR_MESSAGES,
+  VoiceErrorCode,
+} from '../../types/voice';
 import { bhashiniVoiceService } from '../../services/bhashiniVoiceService';
 import { geminiService } from '../../services/geminiService';
 import { familyService } from '../../services/familyService';
 import { reminderService } from '../../services/reminderService';
 import { dailyPlanService } from '../../services/dailyPlanService';
 import { caregiverService } from '../../services/caregiverService';
-import {
-  Mic,
-  Square,
-  Volume2,
-  Loader2,
-  AlertCircle,
-  Globe,
-  Sparkles,
-  X,
-} from 'lucide-react';
+import { useCurrentUser } from '../../hooks/useCurrentUser';
+import { useLanguage } from '../../hooks/useLanguage';
 
 interface BhashiniVoiceAssistantProps {
   onClose?: () => void;
@@ -39,13 +53,17 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
     return 'as';
   });
 
-  const [voiceState, setVoiceState] = useState<VoiceState>('IDLE');
+  const [voiceState, setVoiceState] = useState<VoiceState>('READY');
   const [userTranscript, setUserTranscript] = useState<string>('');
   const [assistantReply, setAssistantReply] = useState<string>('');
   const [lastAudioBase64, setLastAudioBase64] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [recordingSeconds, setRecordingSeconds] = useState<number>(0);
+  const [conversationHistory, setConversationHistory] = useState<
+    { role: 'user' | 'assistant'; content: string }[]
+  >([]);
 
+  const isProcessingRef = useRef<boolean>(false);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const autoStopTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -63,6 +81,7 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
       if (autoStopTimeoutRef.current) clearTimeout(autoStopTimeoutRef.current);
       bhashiniVoiceService.stopPlayback();
       bhashiniVoiceService.cleanupRecording();
+      isProcessingRef.current = false;
     };
   }, []);
 
@@ -92,6 +111,7 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
 
   // Start microphone recording
   const handleStartRecording = async () => {
+    if (isProcessingRef.current) return;
     setErrorMessage('');
     setRecordingSeconds(0);
 
@@ -111,14 +131,14 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
       }, 15000);
     } catch (err: any) {
       console.warn('[BhashiniVoiceAssistant] Start recording error:', err);
-      setVoiceState('IDLE');
+      setVoiceState('READY');
       setErrorMessage(
         err.message || VOICE_ERROR_MESSAGES.MIC_PERMISSION_DENIED
       );
     }
   };
 
-  // Stop recording and process pipeline: STT -> Gemini -> TTS
+  // Stop recording and process full pipeline
   const handleStopRecording = async () => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
@@ -129,7 +149,10 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
       autoStopTimeoutRef.current = null;
     }
 
-    setVoiceState('PROCESSING_STT');
+    if (isProcessingRef.current) return;
+
+    setVoiceState('UNDERSTANDING');
+    setErrorMessage('');
 
     try {
       const audioResult = await bhashiniVoiceService.stopRecording();
@@ -140,35 +163,52 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
         selectedLanguage
       );
 
-      // Empty speech check (Section 17 requirement: ONLY show this when speech was genuinely empty)
+      // Empty speech check: ONLY show when speech was genuinely empty
       if (sttResult.isEmpty || !sttResult.text || !sttResult.text.trim()) {
-        setVoiceState('IDLE');
+        setVoiceState('READY');
         setErrorMessage(VOICE_ERROR_MESSAGES.NO_SPEECH_DETECTED);
         return;
       }
 
-      const queryText = sttResult.text.trim();
-      setUserTranscript(queryText);
+      const patientOriginalTranscript = sttResult.text.trim();
+      setUserTranscript(patientOriginalTranscript);
       setErrorMessage('');
 
-      // Connect to Gemini AI with MIND SATHI context
-      await processPatientAIQuery(queryText);
+      // Run complete multilingual conversation pipeline
+      await processPatientAIQuery(patientOriginalTranscript);
     } catch (err: any) {
       console.warn('[BhashiniVoiceAssistant] STT Error:', err);
-      setVoiceState('IDLE');
-      // Show the exact technical-safe error message returned by server or voice service
+      setVoiceState('READY');
       const displayMessage = err.message || VOICE_ERROR_MESSAGES.BHASHINI_ASR_ERROR;
       setErrorMessage(displayMessage);
     }
   };
 
-  // Shared processor for transcribed voice text or quick suggestion chips
-  const processPatientAIQuery = async (queryText: string) => {
-    setVoiceState('PROCESSING_AI');
+  // Complete Multilingual Conversation Pipeline: NMT -> Gemini -> NMT -> TTS
+  const processPatientAIQuery = async (originalQueryText: string) => {
+    if (isProcessingRef.current) return;
+    isProcessingRef.current = true;
     setErrorMessage('');
 
     try {
-      // Gather verified patient context from local/db services
+      // ───────────────────────────────────────────────────────────────────────
+      // STAGE 1: INPUT NMT (Translate Patient Native Speech -> English)
+      // ───────────────────────────────────────────────────────────────────────
+      let englishQuery = originalQueryText;
+      if (selectedLanguage !== 'en') {
+        setVoiceState('TRANSLATING');
+        englishQuery = await bhashiniVoiceService.translateWithBhashini(
+          originalQueryText,
+          selectedLanguage,
+          'en'
+        );
+      }
+
+      // ───────────────────────────────────────────────────────────────────────
+      // STAGE 2: GEMINI ASSISTANT (Answering with verified Supabase data)
+      // ───────────────────────────────────────────────────────────────────────
+      setVoiceState('THINKING');
+
       const familyMembers = familyService.getFamilyMembersForUser(currentUser.id);
       const reminders = reminderService.getRemindersForUser(currentUser.id);
       const dailyPlan = dailyPlanService.getDailyPlan(currentUser.id);
@@ -195,11 +235,12 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
         // Non-blocking
       }
 
-      // Call Gemini assistant grounded in patient's daily plan and language
-      const reply = await geminiService.chatWithMemoryAssistant({
+      const englishReply = await geminiService.chatWithMemoryAssistant({
         userId: currentUser.id,
-        message: queryText,
-        history: [],
+        message: englishQuery,
+        originalMessage: originalQueryText,
+        originalLanguage: selectedLanguage,
+        history: conversationHistory,
         userProfile: currentUser,
         familyMembers,
         reminders,
@@ -208,75 +249,145 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
         language: selectedLanguage,
       });
 
-      setAssistantReply(reply);
+      if (!englishReply || !englishReply.trim()) {
+        const emptyErr = new Error(VOICE_ERROR_MESSAGES.GEMINI_EMPTY_RESPONSE) as any;
+        emptyErr.code = 'GEMINI_EMPTY_RESPONSE';
+        throw emptyErr;
+      }
 
-      // Synthesize speech using Bhashini TTS (with browser speechService fallback)
+      // Update multi-turn conversation history
+      setConversationHistory((prev) => [
+        ...prev.slice(-6),
+        { role: 'user', content: englishQuery },
+        { role: 'assistant', content: englishReply },
+      ]);
+
+      // ───────────────────────────────────────────────────────────────────────
+      // STAGE 3: OUTPUT NMT (Translate English Answer -> Patient Native Language)
+      // ───────────────────────────────────────────────────────────────────────
+      let patientLanguageReply = englishReply;
+      if (selectedLanguage !== 'en') {
+        setVoiceState('TRANSLATING_RESPONSE');
+        patientLanguageReply = await bhashiniVoiceService.translateWithBhashini(
+          englishReply,
+          'en',
+          selectedLanguage
+        );
+      }
+
+      // ───────────────────────────────────────────────────────────────────────
+      // STAGE 4: DISPLAY TRANSLATED ANSWER IN UI
+      // ───────────────────────────────────────────────────────────────────────
+      setAssistantReply(patientLanguageReply);
+
+      // ───────────────────────────────────────────────────────────────────────
+      // STAGE 5: SYNTHESIZE SPEECH WITH BHASHINI TTS
+      // ───────────────────────────────────────────────────────────────────────
       setVoiceState('GENERATING_AUDIO');
       const audioBase64 = await bhashiniVoiceService.textToSpeech(
-        reply,
+        patientLanguageReply,
         selectedLanguage,
         'female'
       );
 
       setLastAudioBase64(audioBase64);
-      setVoiceState('PLAYING_AUDIO');
 
-      // Play synthesized audio aloud
-      await bhashiniVoiceService.speakText(reply, selectedLanguage, audioBase64);
-      setVoiceState('IDLE');
+      // ───────────────────────────────────────────────────────────────────────
+      // STAGE 6: SPEAK ALOUD (Audio playback)
+      // ───────────────────────────────────────────────────────────────────────
+      setVoiceState('SPEAKING');
+      await bhashiniVoiceService.speakText(
+        patientLanguageReply,
+        selectedLanguage,
+        audioBase64
+      );
+
+      setVoiceState('READY');
     } catch (err: any) {
-      console.error('[BhashiniVoiceAssistant] AI Query error:', err);
-      setVoiceState('IDLE');
-      if (!assistantReply) {
-        setErrorMessage(VOICE_ERROR_MESSAGES.GEMINI_ERROR);
-      }
+      console.error('[BhashiniVoiceAssistant] Conversation error:', err);
+      setVoiceState('READY');
+      const errCode = (err.code || err.message) as VoiceErrorCode;
+      const displayMessage =
+        VOICE_ERROR_MESSAGES[errCode] ||
+        err.message ||
+        VOICE_ERROR_MESSAGES.GEMINI_ERROR;
+      setErrorMessage(displayMessage);
+    } finally {
+      isProcessingRef.current = false;
     }
   };
 
   // Replay the synthesized audio response
   const handlePlayAgain = async () => {
     if (!assistantReply) return;
-    setVoiceState('PLAYING_AUDIO');
+    setVoiceState('SPEAKING');
 
     try {
-      await bhashiniVoiceService.speakText(assistantReply, selectedLanguage, lastAudioBase64);
+      await bhashiniVoiceService.speakText(
+        assistantReply,
+        selectedLanguage,
+        lastAudioBase64
+      );
     } catch (e) {
       console.warn('[BhashiniVoiceAssistant] Play again notice:', e);
     } finally {
-      setVoiceState('IDLE');
+      setVoiceState('READY');
     }
   };
 
-  // State flow titles matching Section 15
+  // State flow titles matching Section 12
   const getStatusDisplay = () => {
     switch (voiceState) {
       case 'LISTENING':
         return {
           title: 'Listening...',
-          sub: `Speak clearly in ${VOICE_LANGUAGES.find((l) => l.code === selectedLanguage)?.name} (${recordingSeconds}s)`,
+          sub: `Speak clearly in ${
+            VOICE_LANGUAGES.find((l) => l.code === selectedLanguage)?.name
+          } (${recordingSeconds}s)`,
           color: 'text-rose-400',
         };
+      case 'UNDERSTANDING':
       case 'PROCESSING_STT':
         return {
-          title: 'Understanding you...',
-          sub: 'Processing speech with Bhashini...',
+          title: 'Understanding...',
+          sub: 'Transcribing speech with Bhashini...',
           color: 'text-amber-300',
         };
+      case 'TRANSLATING':
+        return {
+          title: 'Translating...',
+          sub: `Translating ${
+            VOICE_LANGUAGES.find((l) => l.code === selectedLanguage)?.name
+          } to English for AI...`,
+          color: 'text-indigo-300',
+        };
+      case 'THINKING':
       case 'PROCESSING_AI':
         return {
-          title: 'MIND SATHI is thinking...',
-          sub: 'Checking your routine, family & reminders...',
+          title: 'Thinking...',
+          sub: 'Checking your daily routine, plan & reminders...',
           color: 'text-sky-300',
+        };
+      case 'TRANSLATING_RESPONSE':
+        return {
+          title: 'Preparing your answer...',
+          sub: `Translating response to ${
+            VOICE_LANGUAGES.find((l) => l.code === selectedLanguage)?.nativeName
+          }...`,
+          color: 'text-purple-300',
         };
       case 'GENERATING_AUDIO':
         return {
           title: 'Preparing voice...',
-          sub: `Generating ${VOICE_LANGUAGES.find((l) => l.code === selectedLanguage)?.nativeName} speech...`,
+          sub: `Generating ${
+            VOICE_LANGUAGES.find((l) => l.code === selectedLanguage)?.nativeName
+          } speech...`,
           color: 'text-teal-300',
         };
+      case 'SPEAKING':
       case 'PLAYING_AUDIO':
         return {
-          title: 'MIND SATHI is speaking...',
+          title: 'Speaking...',
           sub: 'Listen to your voice companion',
           color: 'text-emerald-300',
         };
@@ -286,16 +397,31 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
           sub: 'Tap below to try again',
           color: 'text-amber-300',
         };
+      case 'READY':
+      case 'IDLE':
       default:
         return {
           title: 'Ready to listen',
-          sub: `Tap the microphone to speak in ${VOICE_LANGUAGES.find((l) => l.code === selectedLanguage)?.nativeName}`,
+          sub: `Tap the microphone to speak in ${
+            VOICE_LANGUAGES.find((l) => l.code === selectedLanguage)?.nativeName
+          }`,
           color: 'text-slate-300',
         };
     }
   };
 
   const status = getStatusDisplay();
+  const isBusy =
+    voiceState === 'UNDERSTANDING' ||
+    voiceState === 'PROCESSING_STT' ||
+    voiceState === 'TRANSLATING' ||
+    voiceState === 'THINKING' ||
+    voiceState === 'PROCESSING_AI' ||
+    voiceState === 'TRANSLATING_RESPONSE' ||
+    voiceState === 'GENERATING_AUDIO';
+
+  const isSpeaking =
+    voiceState === 'SPEAKING' || voiceState === 'PLAYING_AUDIO';
 
   return (
     <div className="bg-gradient-to-br from-[#081B2E] via-[#0E2A47] to-[#0A1A2F] border-2 border-emerald-500/40 rounded-3xl p-5 sm:p-6 shadow-2xl text-white relative overflow-hidden max-w-2xl w-full mx-auto">
@@ -346,20 +472,29 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
                 key={lang.code}
                 type="button"
                 onClick={() => {
-                  if (voiceState === 'IDLE' || voiceState === 'ERROR') {
+                  if (
+                    voiceState === 'READY' ||
+                    voiceState === 'IDLE' ||
+                    voiceState === 'ERROR'
+                  ) {
                     setSelectedLanguage(lang.code);
+                    setUserTranscript('');
+                    setAssistantReply('');
                     setErrorMessage('');
+                    setConversationHistory([]);
                   }
                 }}
-                disabled={voiceState !== 'IDLE' && voiceState !== 'ERROR'}
-                className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                disabled={isBusy || voiceState === 'LISTENING' || isSpeaking}
+                className={`text-xs px-3 py-1.5 rounded-xl font-bold transition-all cursor-pointer ${
                   isSelected
-                    ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-sm'
-                    : 'text-slate-300 hover:text-white hover:bg-white/5 disabled:opacity-50'
+                    ? 'bg-emerald-600 text-white shadow-md shadow-emerald-950/40'
+                    : 'text-slate-300 hover:text-white hover:bg-white/5'
                 }`}
               >
                 <span>{lang.nativeName}</span>
-                <span className="text-[10px] ml-1 opacity-70 uppercase">({lang.code})</span>
+                <span className="text-[10px] ml-1 opacity-70 uppercase">
+                  ({lang.code})
+                </span>
               </button>
             );
           })}
@@ -373,7 +508,7 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
           {voiceState === 'LISTENING' && (
             <div className="absolute inset-0 rounded-full bg-rose-500/40 animate-ping" />
           )}
-          {voiceState === 'PLAYING_AUDIO' && (
+          {isSpeaking && (
             <div className="absolute inset-0 rounded-full bg-emerald-500/40 animate-pulse" />
           )}
 
@@ -385,9 +520,33 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
               title="Click to stop speaking and process"
             >
               <Square className="w-7 h-7 fill-white mb-0.5" />
-              <span className="text-[10px] font-black uppercase tracking-wider">Stop</span>
+              <span className="text-[10px] font-black uppercase tracking-wider">
+                Stop
+              </span>
             </button>
-          ) : voiceState === 'IDLE' || voiceState === 'ERROR' ? (
+          ) : isBusy ? (
+            <div className="relative w-20 h-20 rounded-full bg-[#07192C] border-4 border-blue-400/40 flex flex-col items-center justify-center text-blue-300 shadow-xl">
+              <Loader2 className="w-7 h-7 animate-spin text-emerald-400 mb-0.5" />
+              <span className="text-[9px] font-bold uppercase tracking-wider">
+                Wait
+              </span>
+            </div>
+          ) : isSpeaking ? (
+            <button
+              type="button"
+              onClick={() => {
+                bhashiniVoiceService.stopPlayback();
+                setVoiceState('READY');
+              }}
+              className="relative w-20 h-20 rounded-full bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex flex-col items-center justify-center shadow-xl shadow-emerald-950/50 hover:scale-105 active:scale-95 transition-all cursor-pointer border-4 border-emerald-300/40"
+              title="Stop speaking"
+            >
+              <Square className="w-6 h-6 fill-white mb-0.5" />
+              <span className="text-[9px] font-black uppercase tracking-wider">
+                Stop
+              </span>
+            </button>
+          ) : (
             <button
               type="button"
               onClick={handleStartRecording}
@@ -395,13 +554,10 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
               title="Tap to start speaking"
             >
               <Mic className="w-8 h-8 group-hover:scale-110 transition-transform mb-0.5" />
-              <span className="text-[9px] font-black uppercase tracking-wider">Tap to Speak</span>
+              <span className="text-[9px] font-black uppercase tracking-wider">
+                Tap to Speak
+              </span>
             </button>
-          ) : (
-            <div className="relative w-20 h-20 rounded-full bg-[#07192C] border-4 border-blue-400/40 flex flex-col items-center justify-center text-blue-300 shadow-xl">
-              <Loader2 className="w-7 h-7 animate-spin text-emerald-400 mb-0.5" />
-              <span className="text-[9px] font-bold uppercase tracking-wider">Wait</span>
-            </div>
           )}
         </div>
 
@@ -418,22 +574,49 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
         {/* Recording Visual Wave Indicator */}
         {voiceState === 'LISTENING' && (
           <div className="flex items-center gap-1.5 mt-2.5">
-            <span className="w-1.5 h-3 bg-rose-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-            <span className="w-1.5 h-5 bg-rose-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-            <span className="w-1.5 h-7 bg-rose-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-            <span className="w-1.5 h-4 bg-rose-400 rounded-full animate-bounce" style={{ animationDelay: '450ms' }} />
-            <span className="w-1.5 h-2 bg-rose-400 rounded-full animate-bounce" style={{ animationDelay: '600ms' }} />
+            <span
+              className="w-1.5 h-3 bg-rose-400 rounded-full animate-bounce"
+              style={{ animationDelay: '0ms' }}
+            />
+            <span
+              className="w-1.5 h-5 bg-rose-400 rounded-full animate-bounce"
+              style={{ animationDelay: '150ms' }}
+            />
+            <span
+              className="w-1.5 h-7 bg-rose-400 rounded-full animate-bounce"
+              style={{ animationDelay: '300ms' }}
+            />
+            <span
+              className="w-1.5 h-4 bg-rose-400 rounded-full animate-bounce"
+              style={{ animationDelay: '450ms' }}
+            />
+            <span
+              className="w-1.5 h-2 bg-rose-400 rounded-full animate-bounce"
+              style={{ animationDelay: '600ms' }}
+            />
           </div>
         )}
 
         {/* Speaking Equalizer Indicator */}
-        {voiceState === 'PLAYING_AUDIO' && (
+        {isSpeaking && (
           <div className="flex items-center gap-1.5 mt-2.5">
             <span className="w-1.5 h-3 bg-emerald-400 rounded-full animate-pulse" />
-            <span className="w-1.5 h-6 bg-emerald-400 rounded-full animate-pulse" style={{ animationDelay: '100ms' }} />
-            <span className="w-1.5 h-4 bg-emerald-400 rounded-full animate-pulse" style={{ animationDelay: '200ms' }} />
-            <span className="w-1.5 h-7 bg-emerald-400 rounded-full animate-pulse" style={{ animationDelay: '300ms' }} />
-            <span className="w-1.5 h-3 bg-emerald-400 rounded-full animate-pulse" style={{ animationDelay: '400ms' }} />
+            <span
+              className="w-1.5 h-6 bg-emerald-400 rounded-full animate-pulse"
+              style={{ animationDelay: '100ms' }}
+            />
+            <span
+              className="w-1.5 h-4 bg-emerald-400 rounded-full animate-pulse"
+              style={{ animationDelay: '200ms' }}
+            />
+            <span
+              className="w-1.5 h-7 bg-emerald-400 rounded-full animate-pulse"
+              style={{ animationDelay: '300ms' }}
+            />
+            <span
+              className="w-1.5 h-3 bg-emerald-400 rounded-full animate-pulse"
+              style={{ animationDelay: '400ms' }}
+            />
           </div>
         )}
 
@@ -479,11 +662,11 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
                   <button
                     type="button"
                     onClick={handlePlayAgain}
-                    disabled={voiceState === 'PLAYING_AUDIO'}
+                    disabled={isSpeaking}
                     className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-800 text-white text-[11px] font-bold transition-all shadow-xs cursor-pointer active:scale-95"
                   >
                     <Volume2 className="w-3 h-3" />
-                    <span>{voiceState === 'PLAYING_AUDIO' ? 'Speaking...' : 'Play Again'}</span>
+                    <span>{isSpeaking ? 'Speaking...' : 'Play Again'}</span>
                   </button>
                 </div>
                 <div className="text-xs font-medium text-slate-100 mt-1 leading-relaxed whitespace-pre-line">
@@ -499,7 +682,10 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
       <div className="relative z-10 mt-3 pt-2.5 border-t border-white/10">
         <div className="flex items-center gap-1.5 text-[11px] text-slate-400 font-medium mb-1.5">
           <Sparkles className="w-3 h-3 text-amber-400" />
-          <span>Tap to ask in {VOICE_LANGUAGES.find((l) => l.code === selectedLanguage)?.name}:</span>
+          <span>
+            Tap to ask in{' '}
+            {VOICE_LANGUAGES.find((l) => l.code === selectedLanguage)?.name}:
+          </span>
         </div>
         <div className="flex items-center gap-1.5 flex-wrap">
           {suggestions[selectedLanguage]?.map((item, idx) => (
@@ -507,12 +693,16 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
               key={idx}
               type="button"
               onClick={() => {
-                if (voiceState === 'IDLE' || voiceState === 'ERROR') {
+                if (
+                  voiceState === 'READY' ||
+                  voiceState === 'IDLE' ||
+                  voiceState === 'ERROR'
+                ) {
                   setUserTranscript(item.text);
                   processPatientAIQuery(item.text);
                 }
               }}
-              disabled={voiceState !== 'IDLE' && voiceState !== 'ERROR'}
+              disabled={isBusy || isSpeaking || voiceState === 'LISTENING'}
               className="text-[11px] bg-white/5 hover:bg-white/10 text-slate-200 border border-white/10 hover:border-emerald-500/40 px-2.5 py-1 rounded-full transition-all cursor-pointer disabled:opacity-50 text-left"
             >
               <span>{item.label}</span>

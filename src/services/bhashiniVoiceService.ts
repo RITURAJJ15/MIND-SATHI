@@ -7,7 +7,7 @@
  * Never handles or exposes API keys on the client.
  */
 
-import { VoiceLanguage, STTResponse, TTSResponse, VoiceErrorCode, VOICE_ERROR_MESSAGES } from '../types/voice';
+import { VoiceLanguage, STTResponse, TTSResponse, NMTResponse, VoiceErrorCode, VOICE_ERROR_MESSAGES } from '../types/voice';
 import { speechService } from './speechService';
 
 class BhashiniVoiceService {
@@ -327,6 +327,77 @@ class BhashiniVoiceService {
       }
       const networkErr = new Error(VOICE_ERROR_MESSAGES.NETWORK_ERROR) as any;
       networkErr.code = 'NETWORK_ERROR';
+      throw networkErr;
+    }
+  }
+
+  /**
+   * Calls internal Bhashini NMT endpoint (/api/bhashini/translate)
+   */
+  public async translateWithBhashini(
+    text: string,
+    sourceLanguage: VoiceLanguage,
+    targetLanguage: VoiceLanguage
+  ): Promise<string> {
+    if (!text || !text.trim()) {
+      return '';
+    }
+
+    if (sourceLanguage === targetLanguage) {
+      return text.trim();
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+    try {
+      const response = await fetch('/api/bhashini/translate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: text.trim(),
+          sourceLanguage,
+          targetLanguage,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      const rawText = await response.text();
+      let data: NMTResponse | null = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        const err = new Error(VOICE_ERROR_MESSAGES.BHASHINI_NMT_OUTPUT_ERROR) as any;
+        err.code = 'BHASHINI_NMT_OUTPUT_ERROR';
+        throw err;
+      }
+
+      if (!response.ok || !data || !data.success || !data.translatedText) {
+        const errCode = (data?.error as VoiceErrorCode) || 'BHASHINI_NMT_OUTPUT_ERROR';
+        const errMessage =
+          data?.safeMessage ||
+          VOICE_ERROR_MESSAGES[errCode] ||
+          VOICE_ERROR_MESSAGES.BHASHINI_NMT_OUTPUT_ERROR;
+        const error = new Error(errMessage) as any;
+        error.code = errCode;
+        throw error;
+      }
+
+      return data.translatedText.trim();
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError') {
+        const timeoutErr = new Error(VOICE_ERROR_MESSAGES.TIMEOUT) as any;
+        timeoutErr.code = 'TIMEOUT';
+        throw timeoutErr;
+      }
+      if (err.message && err.code) {
+        throw err;
+      }
+      const networkErr = new Error(VOICE_ERROR_MESSAGES.BHASHINI_NMT_NETWORK_ERROR) as any;
+      networkErr.code = 'BHASHINI_NMT_NETWORK_ERROR';
       throw networkErr;
     }
   }

@@ -1,10 +1,16 @@
 export type VoiceLanguage = 'as' | 'hi' | 'bn' | 'en';
 
 export type VoiceState =
+  | 'READY'
   | 'IDLE'
   | 'LISTENING'
+  | 'UNDERSTANDING'
   | 'PROCESSING_STT'
+  | 'TRANSLATING'
+  | 'THINKING'
   | 'PROCESSING_AI'
+  | 'TRANSLATING_RESPONSE'
+  | 'SPEAKING'
   | 'GENERATING_AUDIO'
   | 'PLAYING_AUDIO'
   | 'ERROR';
@@ -46,6 +52,21 @@ export interface STTResponse {
   };
 }
 
+export interface NMTRequestPayload {
+  text: string;
+  sourceLanguage: VoiceLanguage;
+  targetLanguage: VoiceLanguage;
+}
+
+export interface NMTResponse {
+  success: boolean;
+  translatedText?: string;
+  sourceLanguage?: VoiceLanguage;
+  targetLanguage?: VoiceLanguage;
+  error?: VoiceErrorCode | string;
+  safeMessage?: string;
+}
+
 export interface TTSRequestPayload {
   text: string;
   language: VoiceLanguage;
@@ -66,7 +87,14 @@ export type VoiceErrorCode =
   | 'BHASHINI_AUTH_ERROR'
   | 'BHASHINI_CONFIG_ERROR'
   | 'BHASHINI_ASR_ERROR'
+  | 'BHASHINI_NMT_INPUT_ERROR'
+  | 'BHASHINI_NMT_OUTPUT_ERROR'
+  | 'BHASHINI_NMT_AUTH_ERROR'
+  | 'BHASHINI_NMT_CONFIG_ERROR'
+  | 'BHASHINI_NMT_UNSUPPORTED_LANGUAGE'
+  | 'BHASHINI_NMT_NETWORK_ERROR'
   | 'GEMINI_ERROR'
+  | 'GEMINI_EMPTY_RESPONSE'
   | 'BHASHINI_TTS_ERROR'
   | 'NETWORK_ERROR'
   | 'TIMEOUT'
@@ -78,7 +106,14 @@ export const VOICE_ERROR_MESSAGES: Record<VoiceErrorCode, string> = {
   BHASHINI_AUTH_ERROR: 'Voice service authentication failed. Please check the BHASHINI configuration.',
   BHASHINI_CONFIG_ERROR: 'The selected language voice service is not configured.',
   BHASHINI_ASR_ERROR: 'Voice recognition is temporarily unavailable.',
+  BHASHINI_NMT_INPUT_ERROR: 'Could not process text for translation. Please speak clearly and try again.',
+  BHASHINI_NMT_OUTPUT_ERROR: 'Translation service did not return an answer. Please try again.',
+  BHASHINI_NMT_AUTH_ERROR: 'Voice service authentication failed. Please check the BHASHINI configuration.',
+  BHASHINI_NMT_CONFIG_ERROR: 'Translation service is not configured for this language pair.',
+  BHASHINI_NMT_UNSUPPORTED_LANGUAGE: 'Translation is not supported between the selected languages.',
+  BHASHINI_NMT_NETWORK_ERROR: 'Translation service took too long to respond. Please try again.',
   GEMINI_ERROR: 'MIND SATHI could not prepare a response. Please try again.',
+  GEMINI_EMPTY_RESPONSE: 'MIND SATHI could not generate an answer to your question. Please try asking again.',
   BHASHINI_TTS_ERROR: 'MIND SATHI prepared the answer but could not play the voice response.',
   NETWORK_ERROR: 'Please check your internet connection and try again.',
   TIMEOUT: 'The voice service took too long to respond. Please try again.',
