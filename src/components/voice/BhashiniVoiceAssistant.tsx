@@ -221,20 +221,32 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
 
     try {
       // ───────────────────────────────────────────────────────────────────────
-      // STAGE 1: INPUT NMT (Translate Patient Native Speech -> English)
+      // STAGE 1: INPUT NMT (Translate Patient Native Speech -> English, if needed)
       // ───────────────────────────────────────────────────────────────────────
-      let englishQuery = originalQueryText;
+      let queryForAssistant = originalQueryText;
       if (selectedLanguage !== 'en') {
-        setVoiceState('TRANSLATING');
-        englishQuery = await bhashiniVoiceService.translateWithBhashini(
-          originalQueryText,
-          selectedLanguage,
-          'en'
-        );
+        try {
+          const translated = await bhashiniVoiceService.translateWithBhashini(
+            originalQueryText,
+            selectedLanguage,
+            'en'
+          );
+          // Only adopt translation if it's meaningful and not corrupted punctuation
+          if (
+            translated &&
+            translated.trim().length > 2 &&
+            !/^[?\s.,!]+$/.test(translated) &&
+            !translated.startsWith('???')
+          ) {
+            queryForAssistant = translated;
+          }
+        } catch (tErr) {
+          console.warn('[BhashiniVoiceAssistant] Translation note, proceeding with native text:', tErr);
+        }
       }
 
       // ───────────────────────────────────────────────────────────────────────
-      // STAGE 2: GEMINI ASSISTANT (Answering with verified Supabase data)
+      // STAGE 2: GEMINI ASSISTANT (Native multilingual reasoning)
       // ───────────────────────────────────────────────────────────────────────
       setVoiceState('THINKING');
 
@@ -264,9 +276,9 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
         // Non-blocking
       }
 
-      const englishReply = await geminiService.chatWithMemoryAssistant({
+      const rawReply = await geminiService.chatWithMemoryAssistant({
         userId: currentUser.id,
-        message: englishQuery,
+        message: queryForAssistant,
         originalMessage: originalQueryText,
         originalLanguage: selectedLanguage,
         history: conversationHistory,
@@ -278,7 +290,7 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
         language: selectedLanguage,
       });
 
-      if (!englishReply || !englishReply.trim()) {
+      if (!rawReply || !rawReply.trim()) {
         const emptyErr = new Error(VOICE_ERROR_MESSAGES.GEMINI_EMPTY_RESPONSE) as any;
         emptyErr.code = 'GEMINI_EMPTY_RESPONSE';
         throw emptyErr;
@@ -287,21 +299,38 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
       // Update multi-turn conversation history
       setConversationHistory((prev) => [
         ...prev.slice(-6),
-        { role: 'user', content: englishQuery },
-        { role: 'assistant', content: englishReply },
+        { role: 'user', content: queryForAssistant },
+        { role: 'assistant', content: rawReply },
       ]);
 
       // ───────────────────────────────────────────────────────────────────────
-      // STAGE 3: OUTPUT NMT (Translate English Answer -> Patient Native Language)
+      // STAGE 3: CHECK IF RESPONSE IS ALREADY IN PATIENT'S SCRIPT
       // ───────────────────────────────────────────────────────────────────────
-      let patientLanguageReply = englishReply;
-      if (selectedLanguage !== 'en') {
+      let patientLanguageReply = rawReply;
+      const isAlreadyTargetScript =
+        (selectedLanguage === 'as' && /[\u0980-\u09FF]/.test(rawReply)) ||
+        (selectedLanguage === 'bn' && /[\u0980-\u09FF]/.test(rawReply)) ||
+        (selectedLanguage === 'hi' && /[\u0900-\u097F]/.test(rawReply));
+
+      if (!isAlreadyTargetScript) {
         setVoiceState('TRANSLATING_RESPONSE');
-        patientLanguageReply = await bhashiniVoiceService.translateWithBhashini(
-          englishReply,
-          'en',
-          selectedLanguage
-        );
+        try {
+          const translated = await bhashiniVoiceService.translateWithBhashini(
+            rawReply,
+            'en',
+            selectedLanguage
+          );
+          if (
+            translated &&
+            translated.trim().length > 2 &&
+            !/^[?\s.,!]+$/.test(translated) &&
+            !translated.startsWith('???')
+          ) {
+            patientLanguageReply = translated;
+          }
+        } catch (err) {
+          console.warn('[BhashiniVoiceAssistant] Output NMT notice, using assistant reply:', err);
+        }
       }
 
       // ───────────────────────────────────────────────────────────────────────
@@ -334,6 +363,41 @@ export const BhashiniVoiceAssistant: React.FC<BhashiniVoiceAssistantProps> = ({
       setVoiceState('READY');
     } catch (err: any) {
       console.error('[BhashiniVoiceAssistant] Conversation error:', err);
+      // Elder-friendly resilient fallback: synthesize grounded localized reply
+      try {
+        const familyMembers = familyService.getFamilyMembersForUser(currentUser.id);
+        const reminders = reminderService.getRemindersForUser(currentUser.id);
+        const dailyPlan = dailyPlanService.getDailyPlan(currentUser.id);
+        const safeReply = await geminiService.chatWithMemoryAssistant({
+          userId: currentUser.id,
+          message: originalQueryText,
+          originalMessage: originalQueryText,
+          originalLanguage: selectedLanguage,
+          history: [],
+          userProfile: currentUser,
+          familyMembers,
+          reminders,
+          dailyPlanTasks: (dailyPlan?.tasks || []).map((t) => ({
+            title: typeof t.title === 'string' ? t.title : (t.title as any)?.[selectedLanguage] || '',
+            completed: t.completed,
+          })),
+          language: selectedLanguage,
+        });
+
+        if (safeReply && safeReply.trim()) {
+          setAssistantReply(safeReply);
+          setVoiceState('GENERATING_AUDIO');
+          const audioBase64 = await bhashiniVoiceService.textToSpeech(safeReply, selectedLanguage, 'female');
+          setLastAudioBase64(audioBase64);
+          setVoiceState('SPEAKING');
+          await bhashiniVoiceService.speakText(safeReply, selectedLanguage, audioBase64);
+          setVoiceState('READY');
+          return;
+        }
+      } catch (safeErr) {
+        console.warn('[BhashiniVoiceAssistant] Secondary fallback note:', safeErr);
+      }
+
       setVoiceState('READY');
       const errCode = (err.code || err.message) as VoiceErrorCode;
       const displayMessage =

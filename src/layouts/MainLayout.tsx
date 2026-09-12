@@ -259,12 +259,12 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children, activeTab, onN
       </header>
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-3 xs:p-4 sm:p-6 lg:p-8 pb-24 lg:pb-8">
+      <main className="flex-1 max-w-7xl w-full mx-auto p-3 xs:p-4 sm:p-6 lg:p-8 pb-28 lg:pb-8">
         {children}
       </main>
 
       {/* Mobile Sticky Bottom Navigation Bar (<1024px) for Senior Thumb Ease */}
-      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-[#E8E2D8] shadow-[0_-4px_16px_rgba(0,0,0,0.06)] px-2 py-1.5">
+      <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-[#E8E2D8] shadow-[0_-4px_16px_rgba(0,0,0,0.06)] px-2 pt-1.5 pb-safe">
         <div className="max-w-lg mx-auto flex items-center justify-around gap-1">
           {/* 1. Home */}
           <button

@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabase';
+import { Capacitor } from '@capacitor/core';
 import { PatientLocation, GeolocationCoordinates } from '../types/location';
 
 const LOCAL_STORAGE_PREFIX = 'ms_patient_location_';
@@ -9,6 +10,31 @@ class LocationService {
    * Prompts user via browser native geolocation.
    */
   public async requestBrowserCoordinates(): Promise<GeolocationCoordinates> {
+    if (Capacitor.isNativePlatform()) {
+      try {
+        const { Geolocation } = await import('@capacitor/geolocation');
+        const perm = await Geolocation.requestPermissions();
+        if (perm.location === 'denied') {
+          throw new Error('Location access was denied. Please allow location access in your device settings.');
+        }
+        const pos = await Geolocation.getCurrentPosition({
+          enableHighAccuracy: true,
+          timeout: 15000,
+          maximumAge: 0,
+        });
+        return {
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+        };
+      } catch (nativeErr: any) {
+        if (nativeErr.message && nativeErr.message.includes('denied')) {
+          throw nativeErr;
+        }
+        console.warn('[LocationService] Native geolocation note, attempting browser API fallback:', nativeErr);
+      }
+    }
+
     if (typeof window === 'undefined' || !navigator.geolocation) {
       throw new Error('Geolocation is not supported by your browser.');
     }

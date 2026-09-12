@@ -240,8 +240,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ''
     ).trim();
 
-    if (!translatedText) {
-      console.warn('[Bhashini NMT] Empty translation response');
+    if (
+      !translatedText ||
+      translatedText === '?' ||
+      /^[?\s.,!]+$/.test(translatedText) ||
+      translatedText.startsWith('???')
+    ) {
+      console.warn('[Bhashini NMT] Degraded or empty translation response:', translatedText);
       return res.status(502).json({
         success: false,
         error: 'BHASHINI_NMT_OUTPUT_ERROR',

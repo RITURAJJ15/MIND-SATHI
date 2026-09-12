@@ -94,3 +94,15 @@
   font-family: 'Noto Sans Devanagari', 'Noto Sans Bengali', 'Outfit', sans-serif;
   line-height: 1.6;
 }
+
+/* Mobile Safe Area Insets (iPhone Home Indicator, Notches, Punch Holes) */
+.pt-safe {
+  padding-top: max(env(safe-area-inset-top, 0px), 0.5rem);
+}
+.pb-safe {
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 0.5rem);
+}
+.mb-safe {
+  margin-bottom: max(env(safe-area-inset-bottom, 0px), 0.5rem);
+}
+

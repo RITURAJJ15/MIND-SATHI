@@ -5,6 +5,7 @@ import { authService } from './authService';
 import { supabase } from '../lib/supabase';
 import { offlineDb } from '../lib/offlineDb';
 import { syncService } from './syncService';
+import { Capacitor } from '@capacitor/core';
 
 const STORAGE_KEY_REMINDERS = 'mind_sathi_reminders';
 
@@ -236,7 +237,46 @@ class ReminderService {
         }, (err: unknown) => console.warn('[ReminderService] Supabase insert error:', err));
     }
 
+    this.scheduleNativeNotification(reminder);
     return reminder;
+  }
+
+  private async scheduleNativeNotification(reminder: Reminder): Promise<void> {
+    if (!Capacitor.isNativePlatform()) return;
+    try {
+      const { LocalNotifications } = await import('@capacitor/local-notifications');
+      const perm = await LocalNotifications.requestPermissions();
+      if (perm.display !== 'granted') return;
+
+      const [hourStr, minStr] = reminder.time.split(':');
+      const hours = parseInt(hourStr, 10);
+      const minutes = parseInt(minStr, 10);
+      if (isNaN(hours) || isNaN(minutes)) return;
+
+      const now = new Date();
+      const scheduledDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0);
+      if (scheduledDate.getTime() <= now.getTime()) {
+        scheduledDate.setDate(scheduledDate.getDate() + 1);
+      }
+
+      // Generate stable 32-bit positive integer ID from reminder ID string
+      const notifId = Math.abs(reminder.id.split('').reduce((acc, c) => ((acc << 5) - acc) + c.charCodeAt(0), 0)) % 100000;
+
+      await LocalNotifications.schedule({
+        notifications: [
+          {
+            id: notifId,
+            title: `MIND SATHI: ${reminder.title}`,
+            body: reminder.dosageOrDetail || 'Time for your scheduled wellness activity',
+            schedule: { at: scheduledDate, repeats: true, every: 'day' },
+            sound: 'beep.wav',
+            smallIcon: 'ic_stat_icon_config_sample',
+          },
+        ],
+      });
+    } catch (notifErr) {
+      console.warn('[ReminderService] Native notification scheduling note:', notifErr);
+    }
   }
 }
 

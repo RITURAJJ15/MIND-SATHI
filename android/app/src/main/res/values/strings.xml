@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MIND SATHI</string>
+    <string name="title_activity_main">MIND SATHI</string>
+    <string name="package_name">com.mindsathi.app</string>
+    <string name="custom_url_scheme">com.mindsathi.app</string>
+</resources>

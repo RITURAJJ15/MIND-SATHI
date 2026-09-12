@@ -15,6 +15,7 @@ import { UserProfile, UserRole } from '../types/user';
 import { authService, isRealProfile } from './authService';
 import { gameService } from './gameService';
 import { GameSession } from '../types/game';
+import { resolveApiUrl } from '../lib/apiConfig';
 
 const STORAGE_KEY_ADMIN_AUTH = 'ms_admin_authenticated';
 const STORAGE_KEY_ADMIN_USER = 'ms_admin_user';
@@ -169,7 +170,7 @@ class AdminService {
 
     // 1. First attempt: Authenticate with serverless backend API
     try {
-      const apiRes = await fetch('/api/admin/login', {
+      const apiRes = await fetch(resolveApiUrl('/api/admin/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId: cleanId, password: cleanPass }),
@@ -270,7 +271,7 @@ class AdminService {
 
     // 3. Serverless Admin Telemetry Endpoint (/api/admin/data)
     try {
-      const apiRes = await fetch('/api/admin/data');
+      const apiRes = await fetch(resolveApiUrl('/api/admin/data'));
       if (apiRes.ok) {
         const json = await apiRes.json();
         if (json.profiles && Array.isArray(json.profiles)) {
@@ -397,7 +398,7 @@ class AdminService {
 
     // 3. Serverless API game sessions
     try {
-      const apiRes = await fetch('/api/admin/data');
+      const apiRes = await fetch(resolveApiUrl('/api/admin/data'));
       if (apiRes.ok) {
         const json = await apiRes.json();
         if (json.gameSessions && Array.isArray(json.gameSessions)) {

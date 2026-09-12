@@ -2,6 +2,7 @@ import { FamilyMember, MemoryVaultItem, CallSession, ChatMessage } from '../type
 import { MOCK_FAMILY_MEMBERS, MOCK_MEMORIES } from '../data/mockFamily';
 import { supabase } from '../lib/supabase';
 import { offlineDb } from '../lib/offlineDb';
+import { resolveApiUrl } from '../lib/apiConfig';
 
 const STORAGE_KEY_MEMORIES = 'mind_sathi_memories';
 const STORAGE_KEY_FAMILY = 'mind_sathi_family';
@@ -588,7 +589,7 @@ class FamilyService {
 
     // 5. Also call backend API to guarantee deletion in database regardless of client RLS session
     try {
-      await fetch('/api/family/delete', {
+      await fetch(resolveApiUrl('/api/family/delete'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ memberId: id, patientId, name }),

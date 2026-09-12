@@ -9,6 +9,7 @@
 
 import { VoiceLanguage, STTResponse, TTSResponse, NMTResponse, VoiceErrorCode, VOICE_ERROR_MESSAGES } from '../types/voice';
 import { speechService } from './speechService';
+import { resolveApiUrl } from '../lib/apiConfig';
 
 class BhashiniVoiceService {
   private audioContext: AudioContext | null = null;
@@ -270,7 +271,7 @@ class BhashiniVoiceService {
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     try {
-      const response = await fetch('/api/bhashini/speech-to-text', {
+      const response = await fetch(resolveApiUrl('/api/bhashini/speech-to-text'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -351,7 +352,7 @@ class BhashiniVoiceService {
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     try {
-      const response = await fetch('/api/bhashini/translate', {
+      const response = await fetch(resolveApiUrl('/api/bhashini/translate'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -414,7 +415,7 @@ class BhashiniVoiceService {
     const timeoutId = setTimeout(() => controller.abort(), 15000);
 
     try {
-      const response = await fetch('/api/bhashini/text-to-speech', {
+      const response = await fetch(resolveApiUrl('/api/bhashini/text-to-speech'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

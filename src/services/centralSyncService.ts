@@ -1,11 +1,9 @@
 import { UserProfile } from '../types/user';
+import { resolveApiUrl } from '../lib/apiConfig';
 
 class CentralSyncService {
   private getBaseUrl(): string {
-    if (typeof window !== 'undefined' && window.location.origin) {
-      return window.location.origin;
-    }
-    return 'http://localhost:3000';
+    return resolveApiUrl('').replace(/\/+$/, '');
   }
 
   public async findPatient(identifier: string): Promise<any | null> {

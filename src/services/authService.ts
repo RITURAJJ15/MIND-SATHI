@@ -10,6 +10,7 @@
  */
 
 import { supabase } from '../lib/supabase';
+import { Capacitor } from '@capacitor/core';
 import { UserProfile, UserRole } from '../types/user';
 import {
   AuthResult,
@@ -326,6 +327,37 @@ class AuthService {
       sessionStorage.setItem('ms_pending_oauth_role', role);
       sessionStorage.setItem('ms_intended_role', role);
 
+      // ── Native Capacitor Mobile OAuth Flow ──
+      if (Capacitor.isNativePlatform()) {
+        const redirectTarget = 'com.mindsathi.app://auth/callback';
+        const { data, error } = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: {
+            redirectTo: redirectTarget,
+            skipBrowserRedirect: true,
+            queryParams: {
+              access_type: 'offline',
+              prompt: 'select_account',
+            },
+          },
+        });
+
+        if (error) {
+          let msg = error.message;
+          if (msg.includes('provider is not enabled') || msg.includes('Unsupported provider')) {
+            msg = 'Google provider is not enabled in your Supabase project. Please enable Google under Authentication > Providers in your Supabase dashboard.';
+          }
+          return { success: false, error: msg };
+        }
+
+        if (data?.url) {
+          const { Browser } = await import('@capacitor/browser');
+          await Browser.open({ url: data.url, windowName: '_self' });
+        }
+        return { success: true };
+      }
+
+      // ── Standard Web Browser OAuth Flow (https://www.riturajfx.site/) ──
       const redirectTarget = `${window.location.origin}/#/auth/callback`;
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',

@@ -7,6 +7,7 @@ import { profileService } from './profileService';
 import { soundService } from './soundService';
 import { offlineDb } from '../lib/offlineDb';
 import { syncService } from './syncService';
+import { resolveApiUrl } from '../lib/apiConfig';
 
 const STORAGE_KEY_PLANS = 'mind_sathi_daily_plans';
 const STORAGE_KEY_SESSIONS = 'mind_sathi_game_sessions';
@@ -1333,7 +1334,7 @@ class DailyPlanService {
       const currentUser = authService.getCurrentUser();
       const currentLang = currentUser?.primaryLanguage || 'en';
 
-      const response = await fetch('/api/gemini/plan-personalize', {
+      const response = await fetch(resolveApiUrl('/api/gemini/plan-personalize'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
