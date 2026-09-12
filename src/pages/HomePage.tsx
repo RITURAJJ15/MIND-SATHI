@@ -18,11 +18,11 @@ import { locationService } from '../services/locationService';
 import { PatientLocation } from '../types/location';
 import { HomeLocationModal } from '../components/location/HomeLocationModal';
 import { PatientLiveLocationCard } from '../components/location/PatientLiveLocationCard';
-import { BhashiniVoiceAssistant } from '../components/voice/BhashiniVoiceAssistant';
-import { VoiceErrorBoundary } from '../components/voice/VoiceErrorBoundary';
+import { VoiceAssistantModal } from '../components/voice/VoiceAssistantModal';
 import { FamilyMember } from '../types/family';
 import { supabase } from '../lib/supabase';
 import {
+  Mic,
   Sparkles,
   ArrowRight,
   Play,
@@ -77,6 +77,9 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
   const [showLocationModal, setShowLocationModal] = useState<boolean>(false);
   const [savingLocation, setSavingLocation] = useState<boolean>(false);
   const [locationToast, setLocationToast] = useState<string>('');
+
+  // Voice Assistant Modal state
+  const [showVoiceModal, setShowVoiceModal] = useState<boolean>(false);
 
   const hasInitialCaregiverLoaded = useRef(false);
 
@@ -318,21 +321,41 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
               : 'Your personalized cognitive routine is ready to keep your mind sharp and heart joyful.'}
           </p>
 
-          <button
-            type="button"
-            onClick={() => onNavigate('daily-plan')}
-            className="mt-4 sm:mt-5 inline-flex items-center gap-2 xs:gap-2.5 px-4 xs:px-6 py-2.5 sm:py-3 rounded-full bg-gradient-to-r from-[#D9531E] via-[#C84B16] to-[#BD410E] hover:from-[#E65C23] hover:to-[#CD4912] text-white font-bold text-xs xs:text-sm sm:text-base shadow-lg hover:shadow-orange-950/40 hover:scale-102 transition-all cursor-pointer group"
-          >
-            <Play className="w-3.5 h-3.5 xs:w-4 xs:h-4 fill-white shrink-0" />
-            <span>
-              {currentLang === 'hi'
-                ? 'आज का अभ्यास शुरू करें'
-                : currentLang === 'as'
-                ? 'আজিৰ অভ্যাস আৰম্ভ কৰক'
-                : "Start Today's Practice"}
-            </span>
-            <ArrowRight className="w-3.5 h-3.5 xs:w-4 xs:h-4 group-hover:translate-x-1 transition-transform" />
-          </button>
+          <div className="mt-4 sm:mt-5 flex items-center gap-3 flex-wrap">
+            <button
+              type="button"
+              onClick={() => onNavigate('daily-plan')}
+              className="inline-flex items-center gap-2 xs:gap-2.5 px-4 xs:px-6 py-2.5 sm:py-3 rounded-full bg-gradient-to-r from-[#D9531E] via-[#C84B16] to-[#BD410E] hover:from-[#E65C23] hover:to-[#CD4912] text-white font-bold text-xs xs:text-sm sm:text-base shadow-lg hover:shadow-orange-950/40 hover:scale-102 transition-all cursor-pointer group"
+            >
+              <Play className="w-3.5 h-3.5 xs:w-4 xs:h-4 fill-white shrink-0" />
+              <span>
+                {currentLang === 'hi'
+                  ? 'आज का अभ्यास शुरू करें'
+                  : currentLang === 'as'
+                  ? 'আজিৰ অভ্যাস আৰম্ভ কৰক'
+                  : "Start Today's Practice"}
+              </span>
+              <ArrowRight className="w-3.5 h-3.5 xs:w-4 xs:h-4 group-hover:translate-x-1 transition-transform" />
+            </button>
+
+            {/* Small button to talk with MIND SATHI */}
+            <button
+              type="button"
+              onClick={() => setShowVoiceModal(true)}
+              className="inline-flex items-center gap-2 xs:gap-2.5 px-4 xs:px-5 py-2.5 sm:py-3 rounded-full bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-700 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs xs:text-sm sm:text-base shadow-lg hover:shadow-emerald-950/40 hover:scale-102 transition-all cursor-pointer group border border-emerald-400/30"
+              title="Talk with MIND SATHI Voice Assistant"
+            >
+              <Mic className="w-4 h-4 text-emerald-200 group-hover:scale-110 transition-transform" />
+              <span>
+                {currentLang === 'hi'
+                  ? 'माइंड साथी से बात करें'
+                  : currentLang === 'as'
+                  ? 'মাইণ্ড সাৰথিৰ লগত কথা পাতক'
+                  : 'Talk with MIND SATHI'}
+              </span>
+              <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+            </button>
+          </div>
         </div>
 
         {/* User Profile Glass Card */}
@@ -672,14 +695,6 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
         caregiverName={assignedCaregiver?.full_name || assignedCaregiver?.name}
         isCaregiverLinked={Boolean(assignedCaregiver)}
       />
-
-      {/* Multilingual Voice Assistant powered by Bhashini AI & Gemini */}
-      <VoiceErrorBoundary>
-        <BhashiniVoiceAssistant
-          onPlayGame={(gameId) => onNavigate('play', gameId)}
-          onNavigate={(tab) => onNavigate(tab)}
-        />
-      </VoiceErrorBoundary>
 
       {/* Top Grid: Personalized Recommendation & Streak/XP */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -1266,6 +1281,24 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
           }}
         />
       )}
+
+      {/* Floating Quick Voice Assistant Button */}
+      <button
+        type="button"
+        onClick={() => setShowVoiceModal(true)}
+        className="fixed bottom-6 right-6 z-40 w-14 h-14 rounded-full bg-gradient-to-tr from-emerald-600 via-teal-600 to-emerald-500 hover:from-emerald-500 hover:to-teal-400 text-white shadow-2xl shadow-emerald-950/60 border-2 border-emerald-300/40 flex items-center justify-center hover:scale-110 active:scale-95 transition-all cursor-pointer group"
+        title="Talk with MIND SATHI (Voice AI)"
+        aria-label="Talk with MIND SATHI"
+      >
+        <span className="absolute inset-0 rounded-full bg-emerald-400/30 animate-ping pointer-events-none" />
+        <Mic className="w-6 h-6 group-hover:scale-110 transition-transform relative z-10" />
+      </button>
+
+      {/* Voice Assistant Modal */}
+      <VoiceAssistantModal
+        isOpen={showVoiceModal}
+        onClose={() => setShowVoiceModal(false)}
+      />
     </div>
   );
 };
