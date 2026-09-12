@@ -25,7 +25,6 @@ import {
   Sparkles,
   Phone,
   Bot,
-  ShieldCheck,
   LogOut,
 } from 'lucide-react';
 
@@ -54,7 +53,6 @@ export const MainLayout: React.FC<MainLayoutProps> = ({ children, activeTab, onN
     { id: 'assistant', label: t.nav.assistant, icon: Bot },
     { id: 'ayushman', label: t.nav.ayushman, icon: Building },
     { id: 'clinician', label: t.nav.clinicianPortal, icon: Stethoscope },
-    { id: 'admin', label: t.nav.adminPortal, icon: ShieldCheck },
   ];
 
   return (

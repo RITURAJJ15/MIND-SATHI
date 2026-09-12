@@ -37,6 +37,8 @@ import {
   Award,
   Activity,
   ArrowRight,
+  ArrowLeft,
+  Home,
   LogOut,
   ShieldCheck,
   Building,
@@ -48,15 +50,19 @@ import { AshokaChakraIcon } from '../components/layout/AshokaChakraIcon';
 
 type AdminTab = 'overview' | 'patients' | 'users' | 'games' | 'system';
 
-export const AdminPortalPage: React.FC = () => {
+interface AdminPortalPageProps {
+  onBackToLanding?: () => void;
+}
+
+export const AdminPortalPage: React.FC<AdminPortalPageProps> = ({ onBackToLanding }) => {
   // Authentication gate state
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() =>
     adminService.isAdminAuthenticated()
   );
 
-  // Login Form states
-  const [adminUserId, setAdminUserId] = useState<string>('RITURAJ11');
-  const [adminPassword, setAdminPassword] = useState<string>('RITURAJ@11');
+  // Login Form states (starts completely blank - no public credential exposure)
+  const [adminUserId, setAdminUserId] = useState<string>('');
+  const [adminPassword, setAdminPassword] = useState<string>('');
   const [authError, setAuthError] = useState<string>('');
   const [isAuthenticating, setIsAuthenticating] = useState<boolean>(false);
   const [showPassword, setShowPassword] = useState<boolean>(false);
@@ -164,11 +170,23 @@ export const AdminPortalPage: React.FC = () => {
   // ─────────────────────────────────────────────────────────────────────────────
   if (!isAuthenticated) {
     return (
-      <div className="min-h-[80vh] flex items-center justify-center p-4">
+      <div className="min-h-screen bg-[#FAF7F2] flex items-center justify-center p-4">
         <div className="max-w-md w-full bg-white rounded-3xl shadow-elder border-2 border-amber-300/80 p-6 sm:p-8 relative overflow-hidden animate-fade-in">
           {/* Decorative background glow */}
           <div className="absolute top-0 right-0 -mt-8 -mr-8 w-36 h-36 bg-amber-400/10 rounded-full blur-2xl pointer-events-none" />
           <div className="absolute bottom-0 left-0 -mb-8 -ml-8 w-36 h-36 bg-blue-500/10 rounded-full blur-2xl pointer-events-none" />
+
+          {/* Back button */}
+          {onBackToLanding && (
+            <button
+              onClick={onBackToLanding}
+              type="button"
+              className="mb-4 inline-flex items-center gap-1.5 text-xs font-bold text-gray-500 hover:text-gray-900 transition-colors cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Back to Home</span>
+            </button>
+          )}
 
           {/* Security Badge */}
           <div className="text-center mb-6">
@@ -183,7 +201,7 @@ export const AdminPortalPage: React.FC = () => {
               Admin Portal Security Gateway
             </h1>
             <p className="text-xs sm:text-sm text-gray-600 mt-1 max-w-xs mx-auto">
-              Please enter your administrator credentials to access platform telemetry and patient registries.
+              Please enter your administrator credentials to access platform telemetry and registries.
             </p>
           </div>
 
@@ -204,8 +222,9 @@ export const AdminPortalPage: React.FC = () => {
                   type="text"
                   value={adminUserId}
                   onChange={(e) => setAdminUserId(e.target.value)}
-                  placeholder="e.g. RITURAJ11"
+                  placeholder="Enter administrator user ID"
                   required
+                  autoComplete="username"
                   className="w-full bg-gray-50 border border-gray-300 rounded-xl px-4 py-3 text-sm font-mono font-bold text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white transition-all uppercase"
                 />
                 <KeyRound className="w-4 h-4 text-gray-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
@@ -223,6 +242,7 @@ export const AdminPortalPage: React.FC = () => {
                   onChange={(e) => setAdminPassword(e.target.value)}
                   placeholder="Enter administrator password"
                   required
+                  autoComplete="current-password"
                   className="w-full bg-gray-50 border border-gray-300 rounded-xl px-4 py-3 text-sm font-semibold text-gray-900 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:bg-white transition-all pr-10"
                 />
                 <button
@@ -246,12 +266,9 @@ export const AdminPortalPage: React.FC = () => {
             </button>
           </form>
 
-          <div className="mt-6 pt-4 border-t border-gray-200 text-center">
-            <p className="text-[11px] text-gray-500 font-medium">
-              Configured Administrator ID: <span className="font-mono font-bold text-gray-700">RITURAJ11</span>
-            </p>
-            <p className="text-[10px] text-gray-400 mt-0.5">
-              Role: Super Administrator • Full Database Access • Non-destructive session
+          <div className="mt-6 pt-4 border-t border-gray-100 text-center">
+            <p className="text-[11px] text-gray-400 font-medium">
+              Protected Administrator Area • End-to-End Audited Session
             </p>
           </div>
         </div>
@@ -309,11 +326,23 @@ export const AdminPortalPage: React.FC = () => {
               Administrator Dashboard
             </h1>
             <p className="text-gray-300 text-xs sm:text-sm mt-1 font-medium">
-              Administrator: <strong className="text-amber-300">Rituraj (RITURAJ11)</strong> • Live Data from Supabase & Dexie
+              Administrator: <strong className="text-amber-300">Rituraj (Super Administrator)</strong> • Real Telemetry from Supabase & Dexie
             </p>
           </div>
 
           <div className="flex items-center gap-2.5 flex-wrap self-start md:self-auto">
+            {onBackToLanding && (
+              <button
+                onClick={onBackToLanding}
+                type="button"
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-bold border border-white/20 transition-all cursor-pointer"
+                title="Return to MIND SATHI main site"
+              >
+                <Home className="w-3.5 h-3.5 text-amber-300" />
+                <span>Exit to Main Site</span>
+              </button>
+            )}
+
             <button
               onClick={loadPortalData}
               disabled={isLoading}

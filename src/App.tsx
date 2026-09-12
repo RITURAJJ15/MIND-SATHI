@@ -179,6 +179,11 @@ export const App: React.FC = () => {
     );
   }
 
+  // ── Route 3.5: Administrator Portal ──────────────────────────────────────
+  if (currentPath === '/admin' || currentPath === '/admin/portal') {
+    return <AdminPortalPage onBackToLanding={() => navigate('/')} />;
+  }
+
   // ── Route 4: Patient Authentication ────────────────────────────────────────
   if (currentPath === '/patient/auth' && !isAuthenticated) {
     return (
@@ -383,7 +388,6 @@ export const App: React.FC = () => {
       {activeTab === 'ayushman' && <AyushmanHubPage />}
       {activeTab === 'caregiver' && <CaregiverPortalPage />}
       {activeTab === 'clinician' && <ClinicianPortalPage />}
-      {activeTab === 'admin' && <AdminPortalPage />}
       {activeTab === 'settings' && <ProfileSettingsPage />}
     </MainLayout>
   );

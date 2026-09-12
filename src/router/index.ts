@@ -24,11 +24,19 @@ export type AppRoute =
   | '/auth/callback'
   | '/patient/dashboard'
   | '/caregiver/dashboard'
-  | '/doctor/dashboard';
+  | '/doctor/dashboard'
+  | '/admin'
+  | '/admin/portal';
 
 export function getCleanHashPath(): string {
   const search = window.location.search || '';
   const hash = window.location.hash || '';
+  const pathname = window.location.pathname || '';
+
+  // Direct pathname support for admin
+  if (pathname === '/admin' || pathname === '/admin/' || pathname === '/admin/portal') {
+    return '/admin';
+  }
 
   // Handle Supabase OAuth callback tokens/codes in query or hash:
   // e.g. /?code=... or /?error=... or #access_token=... or #/auth/callback
