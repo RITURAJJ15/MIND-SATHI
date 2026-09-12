@@ -33,7 +33,7 @@ export const CaregiverLiveLocationModal: React.FC<CaregiverLiveLocationModalProp
   const [secondsAgoText, setSecondsAgoText] = useState<string>('Just now');
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
-  // Initialize or request session when modal opens
+  // Initialize or adopt existing session when modal opens
   useEffect(() => {
     if (!isOpen || !patientId) return;
 
@@ -41,8 +41,36 @@ export const CaregiverLiveLocationModal: React.FC<CaregiverLiveLocationModalProp
     setIsLoading(true);
     setErrorMessage('');
 
+    const setupSubscription = (sessionId: string) => {
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+      }
+      unsubscribeRef.current = liveLocationService.subscribeToLiveLocation(
+        sessionId,
+        (updated) => {
+          if (!mounted) return;
+          setSession(updated);
+        }
+      );
+    };
+
     const init = async () => {
       try {
+        // 1. Check if patient is already actively sharing!
+        const existing = await liveLocationService.getSessionForPatient(patientId);
+        if (
+          existing &&
+          existing.status === 'active' &&
+          (!existing.expiresAt || new Date(existing.expiresAt).getTime() > Date.now())
+        ) {
+          if (!mounted) return;
+          setSession(existing);
+          setIsLoading(false);
+          setupSubscription(existing.id);
+          return;
+        }
+
+        // 2. Only request new session if not already active
         const res = await liveLocationService.requestLiveLocation(patientId);
         if (!mounted) return;
 
@@ -54,18 +82,7 @@ export const CaregiverLiveLocationModal: React.FC<CaregiverLiveLocationModalProp
 
         setSession(res.session);
         setIsLoading(false);
-
-        // Subscribe to live updates for this session
-        if (unsubscribeRef.current) {
-          unsubscribeRef.current();
-        }
-        unsubscribeRef.current = liveLocationService.subscribeToLiveLocation(
-          res.session.id,
-          (updated) => {
-            if (!mounted) return;
-            setSession(updated);
-          }
-        );
+        setupSubscription(res.session.id);
       } catch (err: any) {
         if (!mounted) return;
         setErrorMessage(err.message || 'Error establishing location session.');
@@ -82,6 +99,37 @@ export const CaregiverLiveLocationModal: React.FC<CaregiverLiveLocationModalProp
         unsubscribeRef.current = null;
       }
     };
+  }, [isOpen, patientId]);
+
+  // Background polling loop while modal is open:
+  // - Picks up when patient taps "Share Live Location" (status transitions from 'requested' to 'active')
+  // - Syncs latest coordinates if WebSockets are slow or throttled
+  useEffect(() => {
+    if (!isOpen || !patientId) return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const latest = await liveLocationService.getSessionForPatient(patientId);
+        if (latest) {
+          setSession((prev) => {
+            if (!prev) return latest;
+            if (
+              prev.status !== latest.status ||
+              prev.lastLatitude !== latest.lastLatitude ||
+              prev.lastLongitude !== latest.lastLongitude ||
+              prev.lastSeenAt !== latest.lastSeenAt
+            ) {
+              return latest;
+            }
+            return prev;
+          });
+        }
+      } catch (err) {
+        console.warn('[CaregiverLiveLocation] Polling error:', err);
+      }
+    }, 2500);
+
+    return () => clearInterval(pollInterval);
   }, [isOpen, patientId]);
 
   // Heartbeat and freshness monitor (runs every second)
@@ -142,7 +190,7 @@ export const CaregiverLiveLocationModal: React.FC<CaregiverLiveLocationModalProp
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-gray-100 mb-3">
           <div className="flex items-center gap-2.5">
-            <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${isLive ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'}`}>
+            <div className={`w-9 h-9 rounded-xl flex items-center justify-center ${isLive ? 'bg-emerald-100 text-emerald-700' : session?.status === 'requested' ? 'bg-amber-100 text-amber-700' : 'bg-gray-100 text-gray-600'}`}>
               <MapPin className="w-5 h-5" />
             </div>
             <div>
@@ -154,6 +202,16 @@ export const CaregiverLiveLocationModal: React.FC<CaregiverLiveLocationModalProp
                   <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                     LIVE
+                  </span>
+                ) : session?.status === 'requested' ? (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300 flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
+                    WAITING FOR APPROVAL
+                  </span>
+                ) : session?.status === 'active' ? (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                    CONNECTED
                   </span>
                 ) : (
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1">
@@ -208,7 +266,7 @@ export const CaregiverLiveLocationModal: React.FC<CaregiverLiveLocationModalProp
                 Waiting for {patientName} to approve
               </h4>
               <p className="text-xs text-gray-600 max-w-sm leading-relaxed">
-                A live location prompt has been sent to {patientName}'s screen. The live map will appear as soon as they tap <strong>Share Live Location</strong>.
+                A live location prompt has been sent to {patientName}'s screen. The live map will appear automatically as soon as they tap <strong>Share Live Location</strong>.
               </p>
               <div className="flex items-center gap-2 pt-2">
                 <button
@@ -221,7 +279,7 @@ export const CaregiverLiveLocationModal: React.FC<CaregiverLiveLocationModalProp
                 </button>
               </div>
             </div>
-          ) : isLive && hasCoordinates ? (
+          ) : session?.status === 'active' && hasCoordinates ? (
             /* Active Live Location Map View */
             <div className="space-y-3">
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -252,10 +310,21 @@ export const CaregiverLiveLocationModal: React.FC<CaregiverLiveLocationModalProp
                 longitude={session.lastLongitude!}
                 accuracyMeters={session.accuracyMeters}
                 patientName={patientName}
-                isLive={true}
+                isLive={isLive}
                 lastUpdatedText={secondsAgoText}
                 className="h-80 sm:h-96 w-full rounded-2xl overflow-hidden relative shadow-md border border-gray-200"
               />
+            </div>
+          ) : session?.status === 'active' && !hasCoordinates ? (
+            /* Active, waiting for GPS lock */
+            <div className="py-16 flex flex-col items-center justify-center text-center space-y-3 bg-emerald-50/50 rounded-2xl border border-emerald-100 p-6">
+              <Loader2 className="w-9 h-9 text-emerald-600 animate-spin" />
+              <h4 className="font-extrabold text-base text-gray-900">
+                Acquiring GPS Signal...
+              </h4>
+              <p className="text-xs text-gray-600 max-w-sm leading-relaxed">
+                {patientName} has authorized location sharing. Locking onto device GPS coordinates...
+              </p>
             </div>
           ) : (
             /* Disconnected State */

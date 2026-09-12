@@ -297,6 +297,25 @@ class LiveLocationService {
   }
 
   /**
+   * Retrieves the current live location session for a patient (authenticated caller can be caregiver or patient).
+   */
+  public async getSessionForPatient(patientId: string): Promise<LiveLocationSession | null> {
+    if (!patientId || patientId === 'guest') return null;
+    try {
+      const { data, error } = await supabase
+        .from('live_location_sessions')
+        .select('*')
+        .eq('patient_id', patientId)
+        .maybeSingle();
+
+      if (error || !data) return null;
+      return this.mapRowToSession(data);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Subscribes via Supabase Realtime to updates for a specific live location session (for Caregiver).
    */
   public subscribeToLiveLocation(
