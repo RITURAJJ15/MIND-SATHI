@@ -646,12 +646,11 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
       </div>
 
       {/* Dedicated Patient Live Location Sharing Card */}
-      {assignedCaregiver && (
-        <PatientLiveLocationCard
-          patientId={currentUser.id}
-          caregiverName={assignedCaregiver.full_name || assignedCaregiver.name || 'Your Caregiver'}
-        />
-      )}
+      <PatientLiveLocationCard
+        patientId={currentUser.id}
+        caregiverName={assignedCaregiver?.full_name || assignedCaregiver?.name}
+        isCaregiverLinked={Boolean(assignedCaregiver)}
+      />
 
       {/* Top Grid: Personalized Recommendation & Streak/XP */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

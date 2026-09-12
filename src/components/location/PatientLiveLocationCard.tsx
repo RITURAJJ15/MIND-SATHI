@@ -7,11 +7,13 @@ import { LocationPermissionModal } from './LocationPermissionModal';
 interface PatientLiveLocationCardProps {
   patientId: string;
   caregiverName?: string;
+  isCaregiverLinked?: boolean;
 }
 
 export const PatientLiveLocationCard: React.FC<PatientLiveLocationCardProps> = ({
   patientId,
   caregiverName = 'Your Caregiver',
+  isCaregiverLinked = true,
 }) => {
   const [activeSession, setActiveSession] = useState<LiveLocationSession | null>(null);
   const [isSharing, setIsSharing] = useState<boolean>(false);
@@ -20,6 +22,8 @@ export const PatientLiveLocationCard: React.FC<PatientLiveLocationCardProps> = (
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [lastUpdateText, setLastUpdateText] = useState<string>('Just now');
   const [secondsAgo, setSecondsAgo] = useState<number>(0);
+  const [previewCoords, setPreviewCoords] = useState<{ lat: number; lon: number; accuracy: number } | null>(null);
+  const [isPreviewing, setIsPreviewing] = useState<boolean>(false);
 
   // 1. Subscribe to incoming location requests from the connected caregiver
   useEffect(() => {
@@ -173,6 +177,37 @@ export const PatientLiveLocationCard: React.FC<PatientLiveLocationCardProps> = (
     }
   };
 
+  // Handler: Test device GPS signal when unconnected
+  const handleTestGps = () => {
+    if (typeof window === 'undefined' || !navigator.geolocation) {
+      setErrorMessage('Geolocation is not supported by your browser.');
+      return;
+    }
+
+    setIsPreviewing(true);
+    setErrorMessage('');
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setPreviewCoords({
+          lat: pos.coords.latitude,
+          lon: pos.coords.longitude,
+          accuracy: pos.coords.accuracy,
+        });
+        setIsPreviewing(false);
+      },
+      (err) => {
+        setErrorMessage(
+          err.code === 1
+            ? 'Location permission was denied. Please allow location access in your browser to use GPS.'
+            : 'Unable to acquire GPS signal. Please ensure location services are enabled.'
+        );
+        setIsPreviewing(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+    );
+  };
+
   return (
     <>
       <div className="bg-white p-5 sm:p-6 rounded-3xl shadow-elder border border-gray-200 text-left transition-all">
@@ -185,8 +220,13 @@ export const PatientLiveLocationCard: React.FC<PatientLiveLocationCardProps> = (
           </div>
           {isSharing ? (
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-black bg-emerald-100 text-emerald-900 border border-emerald-300">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
               <span>ACTIVE</span>
+            </span>
+          ) : !isCaregiverLinked ? (
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-800 border border-amber-200">
+              <span className="w-2 h-2 rounded-full bg-amber-500" />
+              <span>STANDBY</span>
             </span>
           ) : (
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-gray-100 text-gray-600">
@@ -226,8 +266,49 @@ export const PatientLiveLocationCard: React.FC<PatientLiveLocationCardProps> = (
               <span>Stop Sharing</span>
             </button>
           </div>
+        ) : !isCaregiverLinked ? (
+          /* Standby State: Caregiver Not Linked Yet */
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 text-amber-800 font-bold text-sm">
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+              <span>Standby — Emergency GPS Ready</span>
+            </div>
+            <p className="text-xs text-gray-600 leading-relaxed">
+              Real-time GPS coordinates can be shared securely with your family caregiver during emergencies, daily outdoor walks, or when assistance is needed.
+            </p>
+            <div className="p-3 rounded-2xl bg-amber-50/80 border border-amber-200 text-[11px] text-amber-900 space-y-1">
+              <p className="font-bold flex items-center gap-1.5">
+                <Shield className="w-3.5 h-3.5 text-amber-700" />
+                <span>Family Caregiver Connection</span>
+              </p>
+              <p className="text-amber-800">
+                Connect your family caregiver using your registered email above to activate instant one-tap live GPS tracking.
+              </p>
+            </div>
+            {previewCoords ? (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 space-y-1">
+                <p className="font-black flex items-center gap-1">
+                  <MapPin className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Device GPS Signal Verified</span>
+                </p>
+                <p className="text-[11px] text-emerald-800">
+                  Current Coordinates: {previewCoords.lat.toFixed(5)}°, {previewCoords.lon.toFixed(5)}° (±{Math.round(previewCoords.accuracy)}m)
+                </p>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={handleTestGps}
+                disabled={isPreviewing}
+                className="w-full mt-2 py-2.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50 active:scale-98"
+              >
+                {isPreviewing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <MapPin className="w-3.5 h-3.5" />}
+                <span>Test / Verify Device GPS</span>
+              </button>
+            )}
+          </div>
         ) : (
-          /* Inactive State */
+          /* Normal Inactive State with Linked Caregiver */
           <div className="space-y-3">
             <div className="flex items-center gap-2 text-gray-700 font-bold text-sm">
               <span className="w-2.5 h-2.5 rounded-full bg-gray-300" />

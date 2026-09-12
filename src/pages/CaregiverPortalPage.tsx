@@ -40,6 +40,7 @@ import {
   EyeOff,
   Gamepad2,
   MapPin,
+  Radio,
 } from 'lucide-react';
 import { GoogleSignInButton } from '../components/common/GoogleSignInButton';
 import { CaregiverLiveLocationModal } from '../components/location/CaregiverLiveLocationModal';
@@ -687,6 +688,17 @@ export const CaregiverPortalPage: React.FC = () => {
               Once connected, the patient's real cognitive telemetry, game records, and medical profile will be displayed here. The connection will remain active even after logout until either you or the patient explicitly unlinks.
             </p>
           </div>
+
+          {/* Live Location Safety Feature Highlight */}
+          <div className="bg-gradient-to-r from-emerald-950 via-teal-950 to-slate-900 p-5 rounded-2xl text-white text-left space-y-2 border border-emerald-700/50 shadow-sm">
+            <div className="flex items-center gap-2 text-xs font-black text-emerald-300">
+              <MapPin className="w-4 h-4 text-emerald-400" />
+              <span>Live Senior GPS Tracking</span>
+            </div>
+            <p className="text-[11px] text-emerald-100/80 leading-relaxed">
+              When connected to your senior, you can request and monitor their live location in real time with high accuracy, auto-heartbeat detection, and interactive satellite maps.
+            </p>
+          </div>
         </div>
       </div>
     );
@@ -780,6 +792,37 @@ export const CaregiverPortalPage: React.FC = () => {
               <span>{status.playedToday ? 'Played Games Today' : 'Pending Routine'}</span>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* ── PROMINENT SENIOR LIVE LOCATION & GPS TRACKING CARD ── */}
+      <div className="bg-gradient-to-r from-emerald-900 via-teal-900 to-slate-900 text-white p-6 sm:p-7 rounded-3xl shadow-elder border border-emerald-700/50 flex flex-col sm:flex-row sm:items-center justify-between gap-5 relative overflow-hidden text-left">
+        <div className="flex items-start sm:items-center gap-4 relative z-10">
+          <div className="p-3.5 rounded-2xl bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 shrink-0">
+            <Radio className="w-7 h-7 text-emerald-400 animate-pulse" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-lg font-black text-white">Senior Live GPS Location</h3>
+              <span className="text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full bg-emerald-400/20 text-emerald-300 border border-emerald-400/30">
+                Satellite GPS Ready
+              </span>
+            </div>
+            <p className="text-xs text-emerald-100/80 mt-1 max-w-xl leading-relaxed">
+              Track {selectedPatient.full_name || selectedPatient.name}'s real-time coordinates with high accuracy, active heartbeat monitoring, and interactive Leaflet map.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 relative z-10 shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowLiveLocationModal(true)}
+            className="w-full sm:w-auto px-5 py-3.5 bg-emerald-500 hover:bg-emerald-400 text-emerald-950 font-black text-xs rounded-xl shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-98"
+          >
+            <MapPin className="w-4 h-4 text-emerald-950" />
+            <span>Track Live Location</span>
+          </button>
         </div>
       </div>
 
