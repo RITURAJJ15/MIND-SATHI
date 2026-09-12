@@ -76,17 +76,27 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
   const [savingLocation, setSavingLocation] = useState<boolean>(false);
   const [locationToast, setLocationToast] = useState<string>('');
 
-  // Dedicated helper to fetch and sync caregiver status
-  const fetchAssignedCaregiver = async (patientId: string) => {
+  const hasInitialCaregiverLoaded = useRef(false);
+
+  // Dedicated helper to fetch and sync caregiver status silently in background
+  const fetchAssignedCaregiver = async (patientId: string, isSilent = false) => {
     if (!patientId || patientId === 'guest') return;
-    setLoadingCaregiver(true);
+    if (!isSilent && !hasInitialCaregiverLoaded.current) {
+      setLoadingCaregiver(true);
+    }
     try {
       const cg = await caregiverService.getAssignedCaregiverForPatient(patientId);
-      setAssignedCaregiver(cg);
+      setAssignedCaregiver((prev: any) => {
+        if (prev?.id === cg?.id && prev?.name === cg?.name) return prev;
+        return cg;
+      });
     } catch (e) {
       console.warn('[HomePage] Error checking assigned caregiver:', e);
     } finally {
-      setLoadingCaregiver(false);
+      hasInitialCaregiverLoaded.current = true;
+      if (!isSilent) {
+        setLoadingCaregiver(false);
+      }
     }
   };
 
@@ -115,8 +125,8 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
       return;
     }
 
-    // 1. Initial fetch
-    fetchAssignedCaregiver(currentUser.id);
+    // 1. Initial non-silent fetch
+    fetchAssignedCaregiver(currentUser.id, false);
 
     // 2. Realtime listener on caregiver_patient for this patient
     const channel = supabase
@@ -130,30 +140,31 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
           filter: `patient_id=eq.${currentUser.id}`,
         },
         (payload) => {
+          console.log('[HomePage:Realtime] caregiver_patient change detected:', payload);
           if (payload.eventType === 'DELETE') {
             setAssignedCaregiver(null);
           } else {
-            fetchAssignedCaregiver(currentUser.id);
+            fetchAssignedCaregiver(currentUser.id, true);
           }
         }
       )
       .subscribe();
 
-    // 3. Re-verify on window focus / tab visibility change
+    // 3. Re-verify silently on window focus / tab visibility change
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible' && currentUser.id !== 'guest') {
-        fetchAssignedCaregiver(currentUser.id);
+        fetchAssignedCaregiver(currentUser.id, true);
       }
     };
     window.addEventListener('visibilitychange', onVisibilityChange);
     window.addEventListener('focus', onVisibilityChange);
 
-    // 4. Auto-poll every 4 seconds so cross-browser updates reflect automatically
+    // 4. Silent background poll (every 5 seconds, never flashes or reloads page)
     const pollTimer = setInterval(() => {
       if (document.visibilityState === 'visible' && currentUser.id && currentUser.id !== 'guest') {
-        fetchAssignedCaregiver(currentUser.id);
+        fetchAssignedCaregiver(currentUser.id, true);
       }
-    }, 4000);
+    }, 5000);
 
     return () => {
       clearInterval(pollTimer);

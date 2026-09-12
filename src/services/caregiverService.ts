@@ -177,7 +177,13 @@ class CaregiverService {
     const isCgUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(caregiverId);
     if (isCgUuid) {
       try {
+        const { data: { session: cgSession } } = await supabase.auth.getSession();
+        console.log('[CaregiverConnection:Check] Caregiver auth.uid():', cgSession?.user?.id, 'requested caregiverId:', caregiverId);
+        console.log('[CaregiverConnection:Check] Invoking get_connected_patient_for_caregiver RPC...');
+
         const { data: rpcData, error: rpcErr } = await supabase.rpc('get_connected_patient_for_caregiver');
+        console.log('[CaregiverConnection:Check] get_connected_patient_for_caregiver result:', { data: rpcData, error: rpcErr });
+
         if (!rpcErr && rpcData) {
           const rows = Array.isArray(rpcData) ? rpcData : [rpcData];
           if (rows.length > 0 && rows[0] && rows[0].patient_id) {
@@ -201,6 +207,7 @@ class CaregiverService {
               total_xp: row.total_xp,
               caregiverIds: [caregiverId],
             });
+            console.log('[CaregiverConnection:Check] Connected patient loaded via RPC:', assignedPatients[0]);
           }
         }
       } catch (e) {
@@ -210,11 +217,14 @@ class CaregiverService {
       // ── 2. Direct Supabase caregiver_patient query fallback ────────────────
       if (assignedPatients.length === 0) {
         try {
+          console.log('[CaregiverConnection:Check] Falling back to direct query on public.caregiver_patient for caregiver_id:', caregiverId);
           const { data: linkRows, error: linkErr } = await supabase
             .from('caregiver_patient')
             .select('patient_id')
             .eq('caregiver_id', caregiverId)
             .limit(1);
+
+          console.log('[CaregiverConnection:Check] Direct caregiver_patient rows:', linkRows, 'error:', linkErr);
 
           if (!linkErr && linkRows && linkRows.length > 0 && linkRows[0].patient_id) {
             const patientId = linkRows[0].patient_id;
@@ -454,11 +464,18 @@ class CaregiverService {
 
     // ── 1. Authoritative Supabase RPC check (Single Roundtrip, SECURITY DEFINER) ──
     try {
+      const { data: { session: ptSession } } = await supabase.auth.getSession();
+      console.log('[PatientConnection:Check] Patient auth.uid():', ptSession?.user?.id, 'effectivePatientId:', effectivePatientId);
+      console.log('[PatientConnection:Check] Invoking get_connected_caregiver_for_patient RPC...');
+
       const { data: rpcData, error: rpcErr } = await supabase.rpc('get_connected_caregiver_for_patient');
+      console.log('[PatientConnection:Check] get_connected_caregiver_for_patient result:', { data: rpcData, error: rpcErr });
+
       if (!rpcErr && rpcData) {
         const rows = Array.isArray(rpcData) ? rpcData : [rpcData];
         if (rows.length > 0 && rows[0] && rows[0].caregiver_id) {
           const row = rows[0];
+          console.log('[PatientConnection:Check] Caregiver connected via RPC:', row);
           const mapped: UserProfile = {
             id: row.caregiver_id,
             name: row.name || row.full_name || 'Family Caregiver',
@@ -504,11 +521,14 @@ class CaregiverService {
     // ── 2. Direct Supabase caregiver_patient query fallback ─────────────────────
     try {
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(effectivePatientId)) {
+        console.log('[PatientConnection:Check] Falling back to direct query on public.caregiver_patient for patient_id:', effectivePatientId);
         const { data: linkRows, error: linkErr } = await supabase
           .from('caregiver_patient')
           .select('caregiver_id')
           .eq('patient_id', effectivePatientId)
           .limit(1);
+
+        console.log('[PatientConnection:Check] Direct caregiver_patient rows:', linkRows, 'error:', linkErr);
 
         if (!linkErr && linkRows && linkRows.length > 0 && linkRows[0].caregiver_id) {
           const cgId = linkRows[0].caregiver_id;
@@ -997,11 +1017,16 @@ class CaregiverService {
         let dbSaved = false;
         let dbErrorMsg = '';
 
+        const { data: { session: linkSession } } = await supabase.auth.getSession();
+        console.log('[CaregiverConnection:Link] Caregiver auth.uid():', linkSession?.user?.id, 'effectiveCaregiverId:', effectiveCaregiverId, 'targetPatient.id:', targetPatient.id);
+
         // A. Primary: RPC connect_patient_to_caregiver (SECURITY DEFINER guarantees RLS bypass)
         try {
+          console.log('[CaregiverConnection:Link] Invoking connect_patient_to_caregiver RPC with p_patient_id:', targetPatient.id);
           const { data: rpcRes, error: rpcErr } = await supabase.rpc('connect_patient_to_caregiver', {
             p_patient_id: targetPatient.id,
           });
+          console.log('[CaregiverConnection:Link] connect_patient_to_caregiver RPC response:', { data: rpcRes, error: rpcErr });
 
           if (!rpcErr && rpcRes) {
             dbSaved = true;
@@ -1022,11 +1047,13 @@ class CaregiverService {
         // B. Secondary fallback: Direct table insert
         if (!dbSaved) {
           try {
+            console.log('[CaregiverConnection:Link] Falling back to direct table delete & insert into public.caregiver_patient...');
             await supabase.from('caregiver_patient').delete().eq('caregiver_id', effectiveCaregiverId);
-            const { error: insertErr } = await supabase.from('caregiver_patient').insert({
+            const { data: insData, error: insertErr } = await supabase.from('caregiver_patient').insert({
               caregiver_id: effectiveCaregiverId,
               patient_id: targetPatient.id,
-            });
+            }).select();
+            console.log('[CaregiverConnection:Link] Direct insert response:', { data: insData, error: insertErr });
 
             if (!insertErr) {
               dbSaved = true;
@@ -1045,11 +1072,33 @@ class CaregiverService {
           }
         }
 
-        // C. Hard requirement: Do NOT fake a local connection if database rejected it!
+        // C. Database Verification: Check public.caregiver_patient directly
+        try {
+          const { data: verifyRows, error: verifyErr } = await supabase
+            .from('caregiver_patient')
+            .select('*')
+            .eq('caregiver_id', effectiveCaregiverId)
+            .eq('patient_id', targetPatient.id);
+
+          const rowExists = Boolean(verifyRows && verifyRows.length > 0);
+          console.log('[CaregiverConnection:Link] Database verification in public.caregiver_patient:', {
+            verifyRows,
+            verifyErr,
+            rowExists,
+          });
+
+          if (rowExists) {
+            dbSaved = true;
+          }
+        } catch (vErr) {
+          console.warn('[CaregiverConnection:Link] Database verification query notice:', vErr);
+        }
+
+        // D. Hard requirement: Do NOT fake a local connection if database rejected it!
         if (!dbSaved) {
           return {
             success: false,
-            error: `Failed to store connection in database (${dbErrorMsg || 'RLS policy error'}). Please ensure the unified database migration has been run in the Supabase SQL Editor so both dashboards can access the connection.`,
+            error: `Failed to store connection in database (${dbErrorMsg || 'RLS policy error'}). Both dashboards require this connection to be stored in the database.`,
           };
         }
       }

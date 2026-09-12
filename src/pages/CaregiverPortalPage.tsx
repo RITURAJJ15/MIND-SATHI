@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { caregiverService } from '../services/caregiverService';
 import { useCurrentUser } from '../hooks/useCurrentUser';
 import { useLanguage } from '../hooks/useLanguage';
@@ -152,39 +152,61 @@ export const CaregiverPortalPage: React.FC = () => {
   const [isGeneratingAi, setIsGeneratingAi] = useState<boolean>(false);
   const [patientFamily, setPatientFamily] = useState<FamilyMember[]>([]);
 
+  const hasInitiallyLoaded = useRef(false);
+  const lastAiPatientId = useRef<string | null>(null);
+
   // Load assigned patient for authenticated caregiver
-  const refreshAssignedPatients = async (caregiverId: string) => {
-    setIsLoadingPatients(true);
+  const refreshAssignedPatients = async (caregiverId: string, isSilent = false) => {
+    if (!isSilent && !hasInitiallyLoaded.current) {
+      setIsLoadingPatients(true);
+    }
     try {
       const pts = await caregiverService.getAssignedPatients(caregiverId);
       if (pts && pts.length > 0) {
-        setAssignedPatients([pts[0]]);
         const primary = pts[0];
-        setSelectedPatient(primary);
-        // Load patient family members & latest game sessions from Supabase
+        setAssignedPatients((prev: any[]) => {
+          if (prev.length === 1 && prev[0].id === primary.id) return prev;
+          return [primary];
+        });
+        setSelectedPatient((prev: any) => {
+          if (prev?.id === primary.id) return prev;
+          return primary;
+        });
+
+        // Load patient family members & latest game sessions from Supabase silently
         familyService.syncFamilyMembersFromDb(primary.id).then((f) => setPatientFamily(f));
-        await gameService.syncSessionsFromDb(primary.id);
-        const sessions = gameService.getSessionsForUser(primary.id);
-        setPatientGameSessions(sessions);
-        fetchAiInsight(caregiverId, primary.id);
+        gameService.syncSessionsFromDb(primary.id).then(() => {
+          const sessions = gameService.getSessionsForUser(primary.id);
+          setPatientGameSessions(sessions);
+        });
+
+        // Only generate AI analysis if patient changed or on first load
+        if (lastAiPatientId.current !== primary.id) {
+          lastAiPatientId.current = primary.id;
+          fetchAiInsight(caregiverId, primary.id);
+        }
       } else {
-        setAssignedPatients([]);
-        setSelectedPatient(null);
-        setPatientGameSessions([]);
+        setAssignedPatients((prev: any[]) => (prev.length === 0 ? prev : []));
+        setSelectedPatient((prev: any) => (prev === null ? prev : null));
+        setPatientGameSessions((prev: any[]) => (prev.length === 0 ? prev : []));
+        lastAiPatientId.current = null;
         // Load available patients to help user link
         caregiverService.getAvailablePatients().then((av) => setAvailablePatients(av));
       }
     } catch (e) {
-      console.warn('Error loading assigned patients:', e);
+      console.warn('[CaregiverPortal] Error loading assigned patients:', e);
     } finally {
+      hasInitiallyLoaded.current = true;
       setIsLoadingPatients(false);
     }
   };
 
   useEffect(() => {
     if (isCaregiver && currentUser?.id && currentUser.id !== 'guest') {
-      refreshAssignedPatients(currentUser.id);
+      // 1. Initial load (displays loading skeleton only once)
+      refreshAssignedPatients(currentUser.id, false);
 
+      // 2. Realtime listener on caregiver_patient table
       const channel = supabase
         .channel(`caregiver_pt_link_${currentUser.id}`)
         .on(
@@ -195,26 +217,28 @@ export const CaregiverPortalPage: React.FC = () => {
             table: 'caregiver_patient',
             filter: `caregiver_id=eq.${currentUser.id}`,
           },
-          () => {
-            refreshAssignedPatients(currentUser.id);
+          (payload) => {
+            console.log('[CaregiverPortal:Realtime] caregiver_patient event received:', payload);
+            refreshAssignedPatients(currentUser.id, true);
           }
         )
         .subscribe();
 
+      // 3. Re-verify silently on window focus / tab visibility change
       const onVisibilityChange = () => {
         if (document.visibilityState === 'visible') {
-          refreshAssignedPatients(currentUser.id);
+          refreshAssignedPatients(currentUser.id, true);
         }
       };
       window.addEventListener('visibilitychange', onVisibilityChange);
       window.addEventListener('focus', onVisibilityChange);
 
-      // Auto-poll every 4 seconds so cross-browser updates reflect automatically
+      // 4. Background auto-poll (every 5 seconds, silent, never reloads or remounts page)
       const pollTimer = setInterval(() => {
         if (document.visibilityState === 'visible') {
-          refreshAssignedPatients(currentUser.id);
+          refreshAssignedPatients(currentUser.id, true);
         }
-      }, 4000);
+      }, 5000);
 
       return () => {
         clearInterval(pollTimer);
