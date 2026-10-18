@@ -127,12 +127,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ success: false, error: 'Method not allowed' });
   }
 
+  // ── Safe Diagnostics Probe (Exposes NO secret, only boolean configuration status) ──
+  const action = req.query?.action as string | undefined;
+  if (req.method === 'GET' && action === 'status') {
+    const key = (process.env.TINYFISH_API_KEY || '').trim();
+    const isConfigured = Boolean(key && key !== 'your_tinyfish_api_key_here');
+    return res.status(200).json({
+      success: true,
+      service: 'TinyFish Care Navigator',
+      configured: isConfigured,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   // ── 1. Authentication & Role Enforcement ───────────────────────────────────
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({
       success: false,
-      configured: false,
+      configured: true,
       error: 'UNAUTHORIZED',
       message: 'Authentication required. Missing Bearer token.',
     });
@@ -143,7 +156,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!supabase) {
     return res.status(503).json({
       success: false,
-      configured: false,
+      configured: true,
       error: 'DB_UNAVAILABLE',
       message: 'Database authentication client is not configured.',
     });
@@ -153,7 +166,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (userError || !userData?.user) {
     return res.status(401).json({
       success: false,
-      configured: false,
+      configured: true,
       error: 'INVALID_TOKEN',
       message: 'Invalid or expired session token.',
     });
@@ -174,7 +187,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!isCaregiver) {
     return res.status(403).json({
       success: false,
-      configured: false,
+      configured: true,
       error: 'FORBIDDEN',
       message: 'Forbidden: Access to Care Navigator is restricted to verified caregivers and administrators.',
     });

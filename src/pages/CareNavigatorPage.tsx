@@ -374,6 +374,17 @@ export const CareNavigatorPage: React.FC<CareNavigatorPageProps> = ({ initialSec
             <div>
               <div className="text-xs font-black uppercase text-rose-800">Search Service Notice</div>
               <p className="text-xs mt-0.5 text-rose-900/90">{error}</p>
+              {error.toLowerCase().includes('authenticated') && (
+                <div className="mt-2.5">
+                  <a
+                    href="/caregiver/auth"
+                    className="inline-flex items-center gap-1.5 px-3 py-1 bg-rose-100 hover:bg-rose-200 text-rose-900 text-xs font-bold rounded-lg transition-colors border border-rose-300"
+                  >
+                    <span>Sign In to Caregiver Portal</span>
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </a>
+                </div>
+              )}
             </div>
           </div>
           <button

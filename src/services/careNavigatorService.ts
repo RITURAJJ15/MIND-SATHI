@@ -37,13 +37,13 @@ class CareNavigatorService {
     if (!token) {
       return {
         success: false,
-        configured: false,
+        configured: true,
         section: options.section,
         query: options.query,
         results: [],
         totalResults: 0,
         error: 'UNAUTHORIZED',
-        message: 'Caregiver session expired or not authenticated. Please log in.',
+        message: 'Caregiver session expired or not authenticated. Please log in to search live resources.',
         timestamp: new Date().toISOString(),
       };
     }
@@ -65,7 +65,7 @@ class CareNavigatorService {
         const errorJson = await response.json().catch(() => ({}));
         return {
           success: false,
-          configured: errorJson.configured !== false,
+          configured: errorJson.error === 'CONFIG_REQUIRED' ? false : true,
           section: options.section,
           query: options.query,
           results: [],
