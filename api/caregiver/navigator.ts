@@ -2,10 +2,15 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || '';
+const SUPABASE_KEY =
+  process.env.SUPABASE_SERVICE_ROLE_KEY ||
+  process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+  process.env.SUPABASE_ANON_KEY ||
+  process.env.VITE_SUPABASE_ANON_KEY ||
+  '';
 
-const supabase = (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY)
-  ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
+const supabase = (SUPABASE_URL && SUPABASE_KEY)
+  ? createClient(SUPABASE_URL, SUPABASE_KEY)
   : null;
 
 export type NavigatorSection = 'care_finder' | 'medicine' | 'schemes' | 'notices';
@@ -175,7 +180,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const callerUser = userData.user;
 
   // Verify that the caller is an authorized caregiver or admin
-  const { data: profile } = await supabase
+  const userClient = createClient(SUPABASE_URL, SUPABASE_KEY, {
+    global: {
+      headers: { Authorization: `Bearer ${token}` },
+    },
+  });
+
+  const { data: profile } = await userClient
     .from('profiles')
     .select('role')
     .eq('id', callerUser.id)
