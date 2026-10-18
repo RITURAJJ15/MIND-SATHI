@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { CaregiverPortalPage } from './pages/CaregiverPortalPage';
+import { CareNavigatorPage } from './pages/CareNavigatorPage';
 import { useCurrentUser } from './hooks/useCurrentUser';
 import { authService } from './services/authService';
 import { useLanguage } from './hooks/useLanguage';
@@ -9,12 +10,33 @@ import {
   LogOut,
   ShieldCheck,
   Globe,
-  User,
+  Compass,
 } from 'lucide-react';
 
 export const CaregiverApp: React.FC = () => {
   const { currentUser, isAuthenticated, isCaregiver } = useCurrentUser('caregiver');
   const { currentLang, changeLanguage } = useLanguage();
+  const [activeTab, setActiveTab] = useState<'oversight' | 'navigator'>(() => {
+    return window.location.hash.includes('navigator') ? 'navigator' : 'oversight';
+  });
+
+  useEffect(() => {
+    const handleHash = () => {
+      if (window.location.hash.includes('navigator')) {
+        setActiveTab('navigator');
+      } else {
+        setActiveTab('oversight');
+      }
+    };
+    window.addEventListener('hashchange', handleHash);
+    return () => window.removeEventListener('hashchange', handleHash);
+  }, []);
+
+  const handleTabChange = (tab: 'oversight' | 'navigator') => {
+    setActiveTab(tab);
+    window.location.hash = tab === 'navigator' ? '#/caregiver/navigator' : '#/caregiver/dashboard';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   const handleLogout = async () => {
     await authService.logout();
@@ -113,9 +135,95 @@ export const CaregiverApp: React.FC = () => {
         </div>
       </header>
 
-      {/* ── MAIN CONTENT BODY ── */}
+      {/* ── MAIN CONTENT BODY WITH CAREGIVER PANEL SIDEBAR ── */}
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        <CaregiverPortalPage />
+        <div className="flex flex-col md:flex-row items-start gap-6">
+          {/* ── CAREGIVER PANEL SIDEBAR ── */}
+          <aside className="w-full md:w-64 shrink-0 space-y-4">
+            <div className="bg-white p-3.5 sm:p-4 rounded-3xl border border-emerald-200 shadow-elder space-y-2">
+              <div className="px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-emerald-800/80">
+                Caregiver Navigation
+              </div>
+
+              {/* Sidebar Item 1: Patient Oversight */}
+              <button
+                type="button"
+                onClick={() => handleTabChange('oversight')}
+                className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl text-left transition-all cursor-pointer ${
+                  activeTab === 'oversight'
+                    ? 'bg-gradient-to-r from-emerald-700 to-teal-700 text-white shadow-md'
+                    : 'text-gray-700 hover:text-emerald-900 hover:bg-emerald-50 border border-transparent hover:border-emerald-200'
+                }`}
+              >
+                <div
+                  className={`p-2 rounded-xl shrink-0 ${
+                    activeTab === 'oversight' ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700'
+                  }`}
+                >
+                  <HeartHandshake className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="text-xs font-black">Patient Oversight</div>
+                  <div className={`text-[10px] ${activeTab === 'oversight' ? 'text-emerald-100' : 'text-gray-400'}`}>
+                    Live records & telemetry
+                  </div>
+                </div>
+              </button>
+
+              {/* Sidebar Item 2: Care Navigator (Integrated with TinyFish) */}
+              <button
+                type="button"
+                onClick={() => handleTabChange('navigator')}
+                className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl text-left transition-all cursor-pointer ${
+                  activeTab === 'navigator'
+                    ? 'bg-gradient-to-r from-emerald-700 to-teal-700 text-white shadow-md'
+                    : 'text-gray-700 hover:text-emerald-900 hover:bg-emerald-50 border border-transparent hover:border-emerald-200'
+                }`}
+              >
+                <div
+                  className={`p-2 rounded-xl shrink-0 ${
+                    activeTab === 'navigator' ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700'
+                  }`}
+                >
+                  <Compass className="w-4 h-4" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black">Care Navigator</span>
+                    <span
+                      className={`text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded ${
+                        activeTab === 'navigator'
+                          ? 'bg-white/20 text-white'
+                          : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                      }`}
+                    >
+                      TinyFish
+                    </span>
+                  </div>
+                  <div className={`text-[10px] ${activeTab === 'navigator' ? 'text-emerald-100' : 'text-gray-400'} truncate`}>
+                    Care, drugs & schemes
+                  </div>
+                </div>
+              </button>
+            </div>
+
+            {/* Privacy Guarantee Card */}
+            <div className="bg-emerald-900/95 text-white p-4 rounded-3xl border border-emerald-700/50 shadow-xs hidden md:block text-left">
+              <div className="flex items-center gap-2 text-xs font-black text-emerald-300 mb-1">
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <span>1:1 Caregiver Shield</span>
+              </div>
+              <p className="text-[11px] text-emerald-100/80 leading-relaxed">
+                Patient privacy is protected. Care Navigator queries are executed server-side without sending patient health records or GPS coordinates.
+              </p>
+            </div>
+          </aside>
+
+          {/* ── ACTIVE VIEW CONTENT BODY ── */}
+          <div className="flex-1 min-w-0 w-full">
+            {activeTab === 'oversight' ? <CaregiverPortalPage /> : <CareNavigatorPage />}
+          </div>
+        </div>
       </main>
 
       {/* ── FOOTER ── */}

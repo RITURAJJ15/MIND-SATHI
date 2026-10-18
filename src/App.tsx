@@ -16,6 +16,7 @@ import { LeaderboardPage } from './pages/LeaderboardPage';
 import { RemindersPage } from './pages/RemindersPage';
 import { AyushmanHubPage } from './pages/AyushmanHubPage';
 import { CaregiverPortalPage } from './pages/CaregiverPortalPage';
+import { CareNavigatorPage } from './pages/CareNavigatorPage';
 import { ClinicianPortalPage } from './pages/ClinicianPortalPage';
 import { ProfileSettingsPage } from './pages/ProfileSettingsPage';
 import { FamilyCallingPage } from './pages/FamilyCallingPage';
@@ -29,7 +30,7 @@ import { useCurrentUser } from './hooks/useCurrentUser';
 import { useRouter } from './router';
 import type { AuthScreen, AuthRole } from './types/auth';
 import type { GameId, DifficultyTier } from './types/game';
-import { Brain, LogOut } from 'lucide-react';
+import { Brain, LogOut, Compass, HeartHandshake, ShieldCheck } from 'lucide-react';
 
 export const App: React.FC = () => {
   const { currentPath, navigate } = useRouter();
@@ -252,8 +253,8 @@ export const App: React.FC = () => {
     );
   }
 
-  // ── Route 6: Caregiver Dashboard (Strictly patient oversight & records) ────
-  if (currentPath === '/caregiver/dashboard') {
+  // ── Route 6: Caregiver Dashboard & Care Navigator ─────────────────────────
+  if (currentPath === '/caregiver/dashboard' || currentPath === '/caregiver/navigator') {
     if (!isAuthenticated) {
       navigate('/caregiver/auth', true);
       return null;
@@ -261,7 +262,7 @@ export const App: React.FC = () => {
 
     if (currentUser?.role !== 'caregiver' && !isCaregiver && session?.user?.role !== 'caregiver') {
       // Access denied to non-caregivers
-      navigate('/patient/dashboard', true);
+      window.location.href = '/caregiver.html';
       return null;
     }
 
@@ -322,9 +323,103 @@ export const App: React.FC = () => {
           </div>
         </header>
 
-        {/* Dedicated Caregiver Main Content — strictly patient details & records */}
+        {/* Dedicated Caregiver Main Content with Sidebar */}
         <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-6">
-          <CaregiverPortalPage />
+          <div className="flex flex-col md:flex-row items-start gap-6">
+            {/* ── CAREGIVER PANEL SIDEBAR ── */}
+            <aside className="w-full md:w-64 shrink-0 space-y-4">
+              <div className="bg-white p-3.5 sm:p-4 rounded-3xl border border-emerald-200 shadow-elder space-y-2 text-left">
+                <div className="px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-emerald-800/80">
+                  Caregiver Navigation
+                </div>
+
+                {/* Sidebar Item 1: Patient Oversight */}
+                <button
+                  type="button"
+                  onClick={() => navigate('/caregiver/dashboard')}
+                  className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl text-left transition-all cursor-pointer ${
+                    currentPath === '/caregiver/dashboard'
+                      ? 'bg-gradient-to-r from-emerald-700 to-teal-700 text-white shadow-md'
+                      : 'text-gray-700 hover:text-emerald-900 hover:bg-emerald-50 border border-transparent hover:border-emerald-200'
+                  }`}
+                >
+                  <div
+                    className={`p-2 rounded-xl shrink-0 ${
+                      currentPath === '/caregiver/dashboard' ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700'
+                    }`}
+                  >
+                    <HeartHandshake className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-black">Patient Oversight</div>
+                    <div
+                      className={`text-[10px] ${
+                        currentPath === '/caregiver/dashboard' ? 'text-emerald-100' : 'text-gray-400'
+                      }`}
+                    >
+                      Live records & vitals
+                    </div>
+                  </div>
+                </button>
+
+                {/* Sidebar Item 2: Care Navigator */}
+                <button
+                  type="button"
+                  onClick={() => navigate('/caregiver/navigator')}
+                  className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-2xl text-left transition-all cursor-pointer ${
+                    currentPath === '/caregiver/navigator'
+                      ? 'bg-gradient-to-r from-emerald-700 to-teal-700 text-white shadow-md'
+                      : 'text-gray-700 hover:text-emerald-900 hover:bg-emerald-50 border border-transparent hover:border-emerald-200'
+                  }`}
+                >
+                  <div
+                    className={`p-2 rounded-xl shrink-0 ${
+                      currentPath === '/caregiver/navigator' ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-700'
+                    }`}
+                  >
+                    <Compass className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-black">Care Navigator</span>
+                      <span
+                        className={`text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded ${
+                          currentPath === '/caregiver/navigator'
+                            ? 'bg-white/20 text-white'
+                            : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                        }`}
+                      >
+                        TinyFish
+                      </span>
+                    </div>
+                    <div
+                      className={`text-[10px] ${
+                        currentPath === '/caregiver/navigator' ? 'text-emerald-100' : 'text-gray-400'
+                      } truncate`}
+                    >
+                      Care, drugs & schemes
+                    </div>
+                  </div>
+                </button>
+              </div>
+
+              {/* Privacy Guarantee Card */}
+              <div className="bg-emerald-900/95 text-white p-4 rounded-3xl border border-emerald-700/50 shadow-xs hidden md:block text-left">
+                <div className="flex items-center gap-2 text-xs font-black text-emerald-300 mb-1">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  <span>1:1 Caregiver Shield</span>
+                </div>
+                <p className="text-[11px] text-emerald-100/80 leading-relaxed">
+                  Patient privacy is protected. Care Navigator queries are executed server-side without sending patient health records or GPS coordinates.
+                </p>
+              </div>
+            </aside>
+
+            {/* ── ACTIVE VIEW CONTENT BODY ── */}
+            <div className="flex-1 min-w-0 w-full">
+              {currentPath === '/caregiver/navigator' ? <CareNavigatorPage /> : <CaregiverPortalPage />}
+            </div>
+          </div>
         </main>
       </div>
     );
