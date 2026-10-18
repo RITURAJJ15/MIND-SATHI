@@ -1,13 +1,21 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+const FALLBACK_SUPABASE_URL = 'https://tlyeuyflanjsowiqwrxo.supabase.co';
+const FALLBACK_SUPABASE_KEY = 'sb_publishable_gMWdqSThmv4s1E_lCM0iww_Calt7pJ0';
+
+const SUPABASE_URL =
+  process.env.SUPABASE_URL ||
+  process.env.VITE_SUPABASE_URL ||
+  FALLBACK_SUPABASE_URL;
+
 const SUPABASE_KEY =
   process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
   process.env.SUPABASE_ANON_KEY ||
+  process.env.SUPABASE_KEY ||
+  process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
   process.env.VITE_SUPABASE_ANON_KEY ||
-  '';
+  FALLBACK_SUPABASE_KEY;
 
 const supabase = (SUPABASE_URL && SUPABASE_KEY)
   ? createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -141,6 +149,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       success: true,
       service: 'TinyFish Care Navigator',
       configured: isConfigured,
+      supabase: {
+        urlPresent: Boolean(SUPABASE_URL),
+        keyPresent: Boolean(SUPABASE_KEY),
+        clientInitialized: Boolean(supabase),
+      },
+      envDiagnostics: {
+        hasViteUrl: Boolean(process.env.VITE_SUPABASE_URL),
+        hasSupabaseUrl: Boolean(process.env.SUPABASE_URL),
+        hasVitePublishableKey: Boolean(process.env.VITE_SUPABASE_PUBLISHABLE_KEY),
+        hasServiceRoleKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+        hasAnonKey: Boolean(process.env.SUPABASE_ANON_KEY),
+        hasTinyFishKey: Boolean(process.env.TINYFISH_API_KEY),
+      },
       timestamp: new Date().toISOString(),
     });
   }
