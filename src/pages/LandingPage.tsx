@@ -95,7 +95,7 @@ const GAMES = [
 
 const HOW_IT_WORKS = [
   { step: '01', icon: Users, label: 'Profile', desc: 'Create your personalized elder profile with language, health, and family preferences.' },
-  { step: '02', icon: Gamepad2, label: 'Play', desc: 'Enjoy six adaptive cognitive games crafted for mental wellness.' },
+  { step: '02', icon: Gamepad2, label: 'Play', desc: 'Enjoy 13 adaptive cognitive & cultural games crafted for mental wellness.' },
   { step: '03', icon: LineChart, label: 'Analyze', desc: 'MIND SATHI tracks your performance across six cognitive domains.' },
   { step: '04', icon: Sparkles, label: 'Personalize', desc: 'AI adapts difficulty and suggests the most suitable next game for you.' },
   { step: '05', icon: Trophy, label: 'Progress', desc: 'Earn XP, unlock achievements, and celebrate every milestone.' },
@@ -394,7 +394,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
                 </button>
               </div>
               <div className="mt-8 flex flex-wrap items-center gap-3 justify-center lg:justify-start">
-                {['6 Cognitive Games', 'English · Hindi · Assamese', 'ABHA / PM-JAY Ready'].map(text => (
+                {['13 Cognitive Games', '4 Languages Supported', 'ABHA / PM-JAY Ready'].map(text => (
                   <span key={text} className="flex items-center gap-1.5 text-xs font-semibold text-gray-600 bg-white px-3 py-1.5 rounded-full border border-gray-200 shadow-sm">
                     <CheckCircle2 className="w-4 h-4 text-emerald-500" />{text}
                   </span>
@@ -429,10 +429,10 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8 text-center">
             {[
-              { value: 10000, suffix: '+', label: 'Active Elders' },
-              { value: 6, suffix: '', label: 'Cognitive Games' },
-              { value: 3, suffix: '', label: 'Languages Supported' },
-              { value: 95, suffix: '%', label: 'Family Satisfaction' },
+              { value: 13, suffix: '', label: 'Cognitive Games' },
+              { value: 4, suffix: '', label: 'Languages Supported' },
+              { value: 6, suffix: '', label: 'Cognitive Domains' },
+              { value: 24, suffix: '/7', label: 'AI Voice Companion' },
             ].map(({ value, suffix, label }) => (
               <div key={label} className="flex flex-col items-center">
                 <div className="text-3xl sm:text-4xl font-black text-white"><AnimatedCounter target={value} suffix={suffix} /></div>
@@ -482,8 +482,8 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
             <div className="inline-flex items-center gap-2 bg-amber-100 text-amber-700 px-4 py-2 rounded-full text-xs font-bold mb-4 border border-amber-200">
               <Gamepad2 className="w-4 h-4" /> COGNITIVE GAMES
             </div>
-            <h2 className="text-3xl sm:text-4xl font-black text-gray-900 tracking-tight">Six Games. Six Cognitive Domains.</h2>
-            <p className="mt-4 text-gray-500 max-w-2xl mx-auto text-base sm:text-lg">Each game targets a specific area of cognitive health, designed with clinical guidance for elderly users.</p>
+            <h2 className="text-3xl sm:text-4xl font-black text-gray-900 tracking-tight">13 Adaptive Games. 6 Cognitive Domains.</h2>
+            <p className="mt-4 text-gray-500 max-w-2xl mx-auto text-base sm:text-lg">Each game targets key areas of cognitive health and cultural reminiscence, designed with clinical guidance for elderly users.</p>
           </FadeUp>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {GAMES.map((game, i) => {
@@ -793,7 +793,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onEnterApp, onCaregive
               Start Your Cognitive Wellness Journey Today
             </h2>
             <p className="mt-6 text-lg text-amber-100 max-w-xl mx-auto font-medium leading-relaxed">
-              Join thousands of elderly users across India who are keeping their minds sharp, staying connected with their families, and living each day with joy.
+              Start your cognitive wellness journey today — keeping minds sharp, staying connected with family, and living each day with joy.
             </p>
             <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
               <button onClick={() => handleEnter('login')} type="button" className="group inline-flex items-center justify-center gap-3 px-10 py-5 rounded-2xl text-lg font-extrabold text-sathi-800 bg-white hover:bg-amber-50 shadow-2xl hover:scale-105 transition-all cursor-pointer">
