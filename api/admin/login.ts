@@ -1,6 +1,38 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import * as crypto from 'crypto';
-import { signAdminToken } from './_auth';
+
+function getAdminSecret(): string {
+  return (
+    process.env.ADMIN_JWT_SECRET ||
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.ADMIN_PASSWORD ||
+    ''
+  );
+}
+
+function signAdminToken(adminId: string, ttlHours = 8): string {
+  const secret = getAdminSecret();
+  if (!secret) {
+    throw new Error('ADMIN_SECRET is not configured on the server');
+  }
+
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const payload = Buffer.from(
+    JSON.stringify({
+      sub: adminId,
+      role: 'admin',
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + ttlHours * 3600,
+    })
+  ).toString('base64url');
+
+  const signature = crypto
+    .createHmac('sha256', secret)
+    .update(`${header}.${payload}`)
+    .digest('base64url');
+
+  return `${header}.${payload}.${signature}`;
+}
 
 function timingSafeMatch(a: string, b: string): boolean {
   const hashA = crypto.createHash('sha256').update(a).digest();

@@ -59,6 +59,15 @@ const rateLimitMap = new Map<string, RateLimitRecord>();
 
 function checkRateLimit(key: string, limit = 10, windowMs = 60000): boolean {
   const now = Date.now();
+  // Lazily clean up stale records when map size exceeds threshold
+  if (rateLimitMap.size > 500) {
+    rateLimitMap.forEach((record, k) => {
+      if (now > record.resetAt) {
+        rateLimitMap.delete(k);
+      }
+    });
+  }
+
   const record = rateLimitMap.get(key);
 
   if (!record || now > record.resetAt) {
@@ -73,16 +82,6 @@ function checkRateLimit(key: string, limit = 10, windowMs = 60000): boolean {
   record.count += 1;
   return true;
 }
-
-// Periodically clean up old rate limit records
-setInterval(() => {
-  const now = Date.now();
-  rateLimitMap.forEach((record, key) => {
-    if (now > record.resetAt) {
-      rateLimitMap.delete(key);
-    }
-  });
-}, 120000).unref?.();
 
 // ── SSRF & URL Safety Validation ─────────────────────────────────────────────
 const PRIVATE_IP_PATTERNS = [

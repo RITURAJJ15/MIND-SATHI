@@ -117,3 +117,7 @@ export async function verifyCallerIsAdmin(
 
   return { authorized: false, reason: tokenResult.error || 'Invalid authentication token' };
 }
+
+export default async function handler(req: any, res: any) {
+  return res?.status?.(404)?.json?.({ success: false, error: 'Not an endpoint' });
+}
