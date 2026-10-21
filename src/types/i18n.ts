@@ -49,6 +49,7 @@ export interface TranslationStrings {
     adminPortal?: string;
     family?: string;
     assistant?: string;
+    more?: string;
     settings: string;
   };
   games: {

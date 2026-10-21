@@ -282,7 +282,7 @@ export const HomePage: React.FC<HomePageProps> = ({ onNavigate }) => {
   };
 
   return (
-    <div className="space-y-8 animate-fade-in max-w-6xl mx-auto">
+    <div className="space-y-6 sm:space-y-8 animate-fade-in w-full max-w-6xl mx-auto min-w-0">
       {/* Elder Greeting Banner with Photo Upload and ABHA Status (Navy Tricolor Theme) */}
       <div className="bg-[#0B2239] text-white p-4 xs:p-6 sm:p-8 rounded-2xl sm:rounded-3xl shadow-xl relative overflow-hidden flex flex-col lg:flex-row lg:items-center justify-between gap-5 sm:gap-6 border border-[#163654]">
         {/* Ashoka Chakra Watermark in Center */}

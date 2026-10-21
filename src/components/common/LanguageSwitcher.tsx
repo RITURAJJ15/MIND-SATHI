@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useLanguage } from '../../hooks/useLanguage';
 import { SupportedLanguage } from '../../types/user';
 import { LANGUAGE_META } from '../../data/translations';
-import { Globe, ChevronDown, Check } from 'lucide-react';
+import { Globe, ChevronDown, Check, X } from 'lucide-react';
 
 export const LanguageSwitcher: React.FC<{ compact?: boolean }> = ({ compact = false }) => {
   const { currentLang, changeLanguage } = useLanguage();
@@ -15,108 +15,150 @@ export const LanguageSwitcher: React.FC<{ compact?: boolean }> = ({ compact = fa
         setIsOpen(false);
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsOpen(false);
+    };
+    if (isOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener('keydown', handleKeyDown);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isOpen]);
 
   const currentMeta = LANGUAGE_META[currentLang] || LANGUAGE_META.en;
+  const languageCodes = Object.keys(LANGUAGE_META) as SupportedLanguage[];
 
-  // Quick primary codes
-  const quickCodes: SupportedLanguage[] = ['en', 'hi', 'as', 'bn'];
+  const handleSelectLanguage = (code: SupportedLanguage) => {
+    changeLanguage(code);
+    setIsOpen(false);
+  };
+
+  const renderLanguageItem = (code: SupportedLanguage) => {
+    const meta = LANGUAGE_META[code];
+    const isSelected = currentLang === code;
+    return (
+      <button
+        key={code}
+        onClick={() => handleSelectLanguage(code)}
+        type="button"
+        className={`w-full px-3.5 py-2.5 rounded-xl text-left flex items-center justify-between transition-all cursor-pointer ${
+          isSelected
+            ? 'bg-amber-100 text-sathi-950 font-black ring-1 ring-amber-400/80 shadow-2xs'
+            : 'text-stone-700 hover:bg-amber-50 hover:text-stone-900'
+        }`}
+      >
+        <div className="flex items-center gap-3">
+          <span className="text-xl shrink-0" role="img" aria-label={meta.label}>
+            {meta.flag}
+          </span>
+          <div>
+            <div className="text-sm font-bold text-gray-900 leading-tight">
+              {meta.nativeName}
+            </div>
+            <div className="text-[11px] text-gray-500 leading-tight">
+              {meta.label} • <span className="text-amber-800 font-semibold">{meta.region}</span>
+            </div>
+          </div>
+        </div>
+        {isSelected && (
+          <div className="w-5 h-5 rounded-full bg-sathi-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+            <Check className="w-3.5 h-3.5 stroke-[3]" />
+          </div>
+        )}
+      </button>
+    );
+  };
 
   return (
     <div className="relative inline-block text-left" ref={dropdownRef}>
-      {compact ? (
-        <button
-          onClick={() => setIsOpen(!isOpen)}
-          type="button"
-          aria-label="Select language"
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-2xl bg-amber-50 border border-amber-300 text-amber-950 font-bold text-xs hover:bg-amber-100 transition-colors cursor-pointer"
-        >
-          <span>{currentMeta.flag}</span>
-          <span className="font-semibold">{currentMeta.nativeName}</span>
-          <ChevronDown className="w-3.5 h-3.5 text-amber-800" />
-        </button>
-      ) : (
-        <div className="flex items-center gap-1 bg-amber-50/90 p-1 rounded-2xl border border-amber-300/80 shadow-xs">
-          <Globe className="w-4 h-4 ml-2 mr-1 text-sathi-700 shrink-0" />
-          
-          {/* Top 3 Quick Pills */}
-          <div className="hidden xl:flex items-center gap-1">
-            {quickCodes.map((code) => {
-              const meta = LANGUAGE_META[code];
-              const isActive = currentLang === code;
-              return (
-                <button
-                  key={code}
-                  onClick={() => changeLanguage(code)}
-                  type="button"
-                  className={`px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                    isActive
-                      ? 'bg-sathi-600 text-white shadow-xs'
-                      : 'text-gray-700 hover:bg-amber-100/70'
-                  }`}
-                >
-                  {meta.nativeName}
-                </button>
-              );
-            })}
-          </div>
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        type="button"
+        aria-label="Select language"
+        aria-expanded={isOpen}
+        className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-amber-50/90 border border-amber-300/80 text-amber-950 font-extrabold text-xs hover:bg-amber-100 transition-all cursor-pointer shadow-2xs focus:outline-none focus:ring-2 focus:ring-amber-500"
+        title="Change language / भाषा बदलें / ভাষা নিৰ্বাচন"
+      >
+        <Globe className="w-3.5 h-3.5 text-sathi-700 shrink-0" />
+        <span className="text-xs">{currentMeta.flag}</span>
+        <span className="font-bold">{currentMeta.nativeName}</span>
+        <ChevronDown
+          className={`w-3.5 h-3.5 text-amber-800 transition-transform duration-200 ${
+            isOpen ? 'rotate-180' : ''
+          }`}
+        />
+      </button>
 
-          {/* Dropdown button for all 9 languages */}
-          <button
-            onClick={() => setIsOpen(!isOpen)}
-            type="button"
-            className="flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white border border-amber-200 text-xs font-bold text-gray-800 hover:bg-amber-50 transition-colors cursor-pointer"
-            title="All Northeast & National Languages"
-          >
-            <span className="truncate max-w-[90px]">{currentMeta.nativeName}</span>
-            <ChevronDown className="w-3.5 h-3.5 text-gray-600 shrink-0" />
-          </button>
-        </div>
-      )}
-
-      {/* Language Selection Modal / Dropdown */}
+      {/* Language Selection: Responsive Desktop Dropdown & Mobile Fixed Modal */}
       {isOpen && (
-        <div className="absolute right-0 mt-2 w-72 bg-white rounded-2xl shadow-2xl border border-amber-200 py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
-          <div className="px-4 py-2 border-b border-gray-100">
-            <p className="text-xs font-black uppercase tracking-wider text-sathi-800">Choose Language / ভাষা নিৰ্বাচন</p>
-            <p className="text-[11px] text-gray-500">Northeast & National Languages</p>
+        <>
+          {/* 1. Desktop Dropdown (>= 1024px) - Drops down right below the button with high z-index */}
+          <div className="hidden lg:block absolute right-0 mt-2 w-80 bg-white rounded-2xl shadow-2xl border-2 border-amber-300 py-2 z-[100] ring-1 ring-black/5 animate-fade-in">
+            <div className="px-4 py-2 border-b border-amber-100 flex items-center justify-between">
+              <div>
+                <p className="text-xs font-black uppercase tracking-wider text-sathi-800">
+                  Choose Language / ভাষা নিৰ্বাচন
+                </p>
+                <p className="text-[11px] text-gray-500 font-medium">Regional & National Languages</p>
+              </div>
+              <button
+                onClick={() => setIsOpen(false)}
+                type="button"
+                className="p-1 rounded-lg text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors cursor-pointer"
+                aria-label="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="max-h-84 overflow-y-auto p-1.5 space-y-1 divide-y-0">
+              {languageCodes.map(renderLanguageItem)}
+            </div>
           </div>
-          
-          <div className="max-h-80 overflow-y-auto py-1">
-            {(Object.keys(LANGUAGE_META) as SupportedLanguage[]).map((code) => {
-              const meta = LANGUAGE_META[code];
-              const isSelected = currentLang === code;
-              return (
-                <button
-                  key={code}
-                  onClick={() => {
-                    changeLanguage(code);
-                    setIsOpen(false);
-                  }}
-                  type="button"
-                  className={`w-full px-4 py-2.5 text-left flex items-center justify-between hover:bg-amber-50/80 transition-colors cursor-pointer ${
-                    isSelected ? 'bg-amber-100/70 font-black text-sathi-900' : 'text-gray-700'
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5">
-                    <span className="text-base">{meta.flag}</span>
-                    <div>
-                      <div className="text-sm font-bold text-gray-900 leading-tight">
-                        {meta.nativeName}
-                      </div>
-                      <div className="text-[11px] text-gray-500 leading-tight">
-                        {meta.label} • <span className="text-amber-700 font-medium">{meta.region}</span>
-                      </div>
-                    </div>
+
+          {/* 2. Mobile/Tablet Modal Dialog (< 1024px) - Immune to scroll containers & drawer clipping */}
+          <div className="lg:hidden fixed inset-0 z-[100] bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-3 animate-fade-in">
+            {/* Backdrop click to close */}
+            <div
+              className="absolute inset-0"
+              onClick={() => setIsOpen(false)}
+              aria-hidden="true"
+            />
+
+            <div className="relative w-full max-w-sm bg-white rounded-3xl shadow-2xl border-2 border-amber-400 p-4 max-h-[85vh] flex flex-col z-10 animate-slide-up">
+              <div className="flex items-center justify-between pb-3 border-b border-gray-100">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-amber-100 flex items-center justify-center text-sathi-700">
+                    <Globe className="w-4 h-4" />
                   </div>
-                  {isSelected && <Check className="w-4 h-4 text-sathi-600" />}
+                  <div>
+                    <h3 className="text-sm font-black text-gray-900 leading-tight">
+                      Choose Language / ভাষা নিৰ্বাচন
+                    </h3>
+                    <p className="text-[11px] text-gray-500 font-medium">
+                      Regional & National Languages
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setIsOpen(false)}
+                  type="button"
+                  className="p-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-600 transition-colors cursor-pointer"
+                  aria-label="Close"
+                >
+                  <X className="w-4 h-4" />
                 </button>
-              );
-            })}
+              </div>
+
+              <div className="overflow-y-auto py-2 space-y-1.5 flex-1">
+                {languageCodes.map(renderLanguageItem)}
+              </div>
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );

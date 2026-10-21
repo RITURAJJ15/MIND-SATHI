@@ -1,24 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Phone,
-  Video,
   MessageSquare,
   Star,
-  Plus,
-  Mic,
-  MicOff,
-  Volume2,
-  VolumeX,
-  PhoneOff,
-  Send,
   UserPlus,
-  Sparkles,
   Camera,
-  CameraOff,
   Check,
-  Clock,
-  Heart,
-  Smile,
   Upload,
   Loader2,
   Info,
@@ -26,35 +13,34 @@ import {
   Eye,
   Trash2,
   AlertTriangle,
+  Copy,
+  Shield,
+  Heart,
 } from 'lucide-react';
 import { useCurrentUser } from '../hooks/useCurrentUser';
 import { useLanguage } from '../hooks/useLanguage';
 import { familyService } from '../services/familyService';
 import { storageService } from '../services/storageService';
-import { FamilyMember, CallSession, ChatMessage } from '../types/family';
+import { caregiverService } from '../services/caregiverService';
+import { FamilyMember } from '../types/family';
 import { VoicePromptButton } from '../components/common/VoicePromptButton';
+import { PatientCaregiverChatModal } from '../components/chat/PatientCaregiverChatModal';
 
 export const FamilyCallingPage: React.FC = () => {
   const { currentUser } = useCurrentUser();
   const { currentLang, t } = useLanguage();
   const [familyMembers, setFamilyMembers] = useState<FamilyMember[]>([]);
 
-  // Active call modal state
-  const [activeCall, setActiveCall] = useState<{
-    member: FamilyMember;
-    type: 'voice' | 'video';
-    timer: number;
-    isMuted: boolean;
-    isSpeaker: boolean;
-    isVideoActive: boolean;
-  } | null>(null);
+  // Real calling state
+  const [callConfirmContact, setCallConfirmContact] = useState<FamilyMember | null>(null);
+  const [dialingInfo, setDialingInfo] = useState<{ member: FamilyMember; phone: string } | null>(null);
+  const [dialError, setDialError] = useState<string | null>(null);
+  const [copiedDialPhone, setCopiedDialPhone] = useState(false);
 
-  // Active chat modal state
-  const [activeChat, setActiveChat] = useState<{
-    member: FamilyMember;
-    messages: ChatMessage[];
-    input: string;
-  } | null>(null);
+  // Real caregiver chat modal state
+  const [showChatModal, setShowChatModal] = useState(false);
+  const [assignedCaregiver, setAssignedCaregiver] = useState<any | null>(null);
+  const [loadingCaregiver, setLoadingCaregiver] = useState(true);
 
   // Add Member modal state
   const [showAddModal, setShowAddModal] = useState(false);
@@ -70,6 +56,69 @@ export const FamilyCallingPage: React.FC = () => {
   const [selectedDetailMember, setSelectedDetailMember] = useState<FamilyMember | null>(null);
   const [isUpdatingDetailPhoto, setIsUpdatingDetailPhoto] = useState(false);
   const detailFileInputRef = useRef<HTMLInputElement>(null);
+
+  // Delete Member state & handler
+  const [memberToDelete, setMemberToDelete] = useState<FamilyMember | null>(null);
+  const [isDeletingMember, setIsDeletingMember] = useState(false);
+
+  // Load family members (sync from Supabase for real users)
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    if (currentUser.id === 'guest') return;
+    const isRealUser = currentUser.id.includes('-') && currentUser.id.length > 20;
+    if (isRealUser) {
+      familyService.syncFamilyMembersFromDb(currentUser.id).then((members) => {
+        setFamilyMembers(members);
+      });
+    } else {
+      setFamilyMembers(familyService.getFamilyMembersForUser(currentUser.id));
+    }
+  }, [currentUser?.id]);
+
+  // Load linked caregiver for real patient-caregiver chat
+  useEffect(() => {
+    if (!currentUser?.id || currentUser.id === 'guest') {
+      setLoadingCaregiver(false);
+      return;
+    }
+
+    caregiverService
+      .getAssignedCaregiverForPatient(currentUser.id)
+      .then((cg) => {
+        setAssignedCaregiver(cg);
+      })
+      .catch((err) => {
+        console.warn('[FamilyCallingPage] Error fetching assigned caregiver:', err);
+      })
+      .finally(() => {
+        setLoadingCaregiver(false);
+      });
+  }, [currentUser?.id]);
+
+  // Real phone dialer trigger
+  const handleInitiateCall = (member: FamilyMember) => {
+    const raw = member.phone || '';
+    const sanitized = raw.replace(/[^\d+]/g, '');
+    if (!sanitized || sanitized.length < 5) {
+      setDialError(`No valid phone number found for ${member.name}. Please edit or add a phone number.`);
+      return;
+    }
+    setDialError(null);
+    setCallConfirmContact(member);
+  };
+
+  const handleConfirmRealDial = (member: FamilyMember) => {
+    const raw = member.phone || '';
+    const sanitized = raw.replace(/[^\d+]/g, '');
+    // Trigger real system/browser tel: URI
+    window.location.href = `tel:${sanitized}`;
+    setDialingInfo({ member, phone: member.phone });
+    setCallConfirmContact(null);
+  };
+
+  const handleOpenChat = (member?: FamilyMember) => {
+    setShowChatModal(true);
+  };
 
   const handleUpdateDetailPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -94,10 +143,6 @@ export const FamilyCallingPage: React.FC = () => {
     }
   };
 
-  // Delete Member state & handler
-  const [memberToDelete, setMemberToDelete] = useState<FamilyMember | null>(null);
-  const [isDeletingMember, setIsDeletingMember] = useState(false);
-
   const handleConfirmDelete = async () => {
     if (!memberToDelete) return;
     setIsDeletingMember(true);
@@ -115,102 +160,6 @@ export const FamilyCallingPage: React.FC = () => {
     }
   };
 
-  // Load family members (sync from Supabase for real users)
-  useEffect(() => {
-    if (!currentUser?.id) return;
-    if (currentUser.id === 'guest') return;
-    const isRealUser = currentUser.id.includes('-') && currentUser.id.length > 20;
-    if (isRealUser) {
-      familyService.syncFamilyMembersFromDb(currentUser.id).then((members) => {
-        setFamilyMembers(members);
-      });
-    } else {
-      setFamilyMembers(familyService.getFamilyMembersForUser(currentUser.id));
-    }
-  }, [currentUser?.id]);
-
-  // Live timer for active call
-  useEffect(() => {
-    let interval: any = null;
-    if (activeCall) {
-      interval = setInterval(() => {
-        setActiveCall((prev) => (prev ? { ...prev, timer: prev.timer + 1 } : null));
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [activeCall]);
-
-  const formatTimer = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const handleStartCall = (member: FamilyMember, type: 'voice' | 'video') => {
-    setActiveCall({
-      member,
-      type,
-      timer: 0,
-      isMuted: false,
-      isSpeaker: true,
-      isVideoActive: type === 'video',
-    });
-  };
-
-  const handleEndCall = () => {
-    if (activeCall) {
-      familyService.recordCall({
-        id: `call-${Date.now()}`,
-        contactId: activeCall.member.id,
-        contactName: activeCall.member.name,
-        contactPhoto: activeCall.member.photoUrl,
-        relationship: typeof activeCall.member.relationship === 'string'
-          ? activeCall.member.relationship
-          : activeCall.member.relationship.en,
-        type: activeCall.type,
-        status: 'ended',
-        durationSeconds: activeCall.timer,
-        isMuted: activeCall.isMuted,
-        isSpeakerOn: activeCall.isSpeaker,
-        isVideoEnabled: activeCall.isVideoActive,
-      });
-    }
-    setActiveCall(null);
-  };
-
-  const handleOpenChat = (member: FamilyMember) => {
-    setActiveChat({
-      member,
-      messages: familyService.getMessages(),
-      input: '',
-    });
-  };
-
-  const handleSendMessage = (textToSend?: string) => {
-    const text = textToSend || activeChat?.input;
-    if (!text?.trim() || !activeChat) return;
-
-    const userMsg = familyService.sendMessage(text, true, currentUser?.preferredName || 'Me');
-    setActiveChat((prev) =>
-      prev ? { ...prev, messages: [...prev.messages, userMsg], input: '' } : null
-    );
-
-    // Simulated warm automated response after 1.5s
-    setTimeout(() => {
-      const replies = [
-        'Glad to hear that, Deuta! Take rest and drink your herbal tea.',
-        'Love you so much! Sending you lots of love from Guwahati.',
-        'Got your message! I will call you this evening after work.',
-        'Shabash! Keep playing your brain games, we are so proud of you!',
-      ];
-      const replyText = replies[Math.floor(Math.random() * replies.length)];
-      const replyMsg = familyService.sendMessage(replyText, false, activeChat.member.name);
-      setActiveChat((prev) =>
-        prev ? { ...prev, messages: [...prev.messages, replyMsg] } : null
-      );
-    }, 1500);
-  };
-
   const handleAddMember = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMemberName.trim() || !currentUser?.id) return;
@@ -219,7 +168,6 @@ export const FamilyCallingPage: React.FC = () => {
     let resolvedPhotoUrl =
       photoPreview || 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=300&auto=format&fit=crop&q=80';
 
-    // Compress & persist photo to Supabase storage / database
     if (photoFile) {
       resolvedPhotoUrl = await storageService.processAndStorePhoto(
         'family-photos',
@@ -250,14 +198,6 @@ export const FamilyCallingPage: React.FC = () => {
     setPhotoPreview('');
   };
 
-  const quickPhrases = [
-    'I took my medicines! 💊',
-    'I just had my tea & meal ☕',
-    'Feeling happy & active today! 😊',
-    'Please call me when you are free 📞',
-    'Missing you all! ❤️',
-  ];
-
   return (
     <div className="space-y-8 animate-fade-in max-w-6xl mx-auto">
       {/* Header Banner */}
@@ -269,7 +209,7 @@ export const FamilyCallingPage: React.FC = () => {
               {currentLang === 'hi' ? 'परिवार व आत्मीय जन' : currentLang === 'as' ? 'পৰিয়াল আৰু আপোনজন' : 'Family Connection & Calling'}
             </span>
             <VoicePromptButton
-              text="Family connection and one tap calling panel. Connect with your children and grandchildren anytime."
+              text="Family connection and real phone dialing panel. Connect directly with your children, grandchildren, and designated caregiver."
               size="sm"
             />
           </div>
@@ -278,10 +218,10 @@ export const FamilyCallingPage: React.FC = () => {
           </h1>
           <p className="text-rose-100 text-sm sm:text-base mt-1.5 font-medium max-w-xl">
             {currentLang === 'hi'
-              ? 'एक स्पर्श से अपने बच्चों और परिवार से जुड़ें। बड़े बटन और सरल इंटरफ़ेस।'
+              ? 'एक स्पर्श से अपने बच्चों और परिवार से फोन पर बात करें। सुरक्षित पारिवारिक चैट।'
               : currentLang === 'as'
-              ? 'এটা টিপাতে সন্তান আৰু পৰিয়ালৰ সৈতে কথা পাতক। ডাঙৰ বুটাম আৰু সহজ পদ্ধতি।'
-              : 'Stay close to your children and grandchildren with one-touch voice and video calls.'}
+              ? 'এটা টিপাতে সন্তান আৰু পৰিয়ালৰ সৈতে ফোনত কথা পাতক। সুৰক্ষিত পাৰিবাৰিক বাৰ্তালাপ।'
+              : 'Stay close to your loved ones with 1-tap real phone dialing and secure family chat.'}
           </p>
         </div>
 
@@ -294,6 +234,79 @@ export const FamilyCallingPage: React.FC = () => {
           <span>Add Family Member</span>
         </button>
       </div>
+
+      {/* ── DEDICATED CAREGIVER DIRECT CHAT & CONNECTION CARD ── */}
+      <div className="bg-gradient-to-r from-emerald-900 via-teal-900 to-amber-950 text-white p-5 sm:p-6 rounded-3xl shadow-elder border border-emerald-700/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-3.5">
+          <div className="relative shrink-0">
+            <img
+              src={
+                assignedCaregiver?.avatarUrl ||
+                `https://api.dicebear.com/9.x/avataaars/svg?seed=caregiver&backgroundColor=b6e3f4`
+              }
+              alt="Caregiver"
+              className="w-14 h-14 rounded-2xl object-cover border-2 border-emerald-400 bg-emerald-800/50"
+            />
+            {assignedCaregiver && (
+              <span
+                className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-emerald-400 border-2 border-white shadow-xs"
+                title="Connected"
+              />
+            )}
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-lg font-black text-white">
+                {assignedCaregiver
+                  ? assignedCaregiver.preferredName || assignedCaregiver.name
+                  : 'Family Caregiver'}
+              </h3>
+              <span
+                className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-full border ${
+                  assignedCaregiver
+                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/30'
+                    : 'bg-amber-500/20 text-amber-300 border-amber-400/30'
+                }`}
+              >
+                {assignedCaregiver ? 'Linked Caregiver' : 'Caregiver Pending'}
+              </span>
+            </div>
+            <p className="text-xs text-emerald-100/80 mt-0.5">
+              {assignedCaregiver
+                ? 'Direct secure text messaging with your designated family caregiver.'
+                : 'Share your connection code so your son or daughter can connect in Caregiver Portal.'}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2.5 shrink-0">
+          <button
+            onClick={() => setShowChatModal(true)}
+            type="button"
+            className="w-full sm:w-auto px-5 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-amber-950 font-black text-xs shadow-md transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95"
+          >
+            <MessageSquare className="w-4 h-4" />
+            <span>{assignedCaregiver ? 'Open Caregiver Chat' : 'Check Caregiver Chat'}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Dial Error Banner */}
+      {dialError && (
+        <div className="p-4 rounded-2xl bg-red-50 border border-red-200 text-red-800 text-xs font-bold flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+            <span>{dialError}</span>
+          </div>
+          <button
+            onClick={() => setDialError(null)}
+            type="button"
+            className="text-red-700 hover:text-red-900 font-extrabold cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Primary Favorite Contacts Section */}
       <div>
@@ -334,7 +347,10 @@ export const FamilyCallingPage: React.FC = () => {
                           title="Online now"
                         />
                       )}
-                      <span className="absolute -bottom-1 -right-1 bg-amber-500 text-white p-1 rounded-lg shadow text-[10px]" title="View Details">
+                      <span
+                        className="absolute -bottom-1 -right-1 bg-amber-500 text-white p-1 rounded-lg shadow text-[10px]"
+                        title="View Details"
+                      >
                         <Eye className="w-3 h-3" />
                       </span>
                     </button>
@@ -375,30 +391,23 @@ export const FamilyCallingPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* 3 Big Action Buttons */}
-                  <div className="grid grid-cols-3 gap-2 pt-3 border-t border-gray-100">
+                  {/* 2 Big Action Buttons: Real Phone Call & Secure Chat (Video Removed) */}
+                  <div className="grid grid-cols-2 gap-3 pt-3 border-t border-gray-100">
                     <button
-                      onClick={() => handleStartCall(member, 'voice')}
+                      onClick={() => handleInitiateCall(member)}
                       type="button"
-                      className="py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs flex flex-col items-center justify-center gap-1 shadow-tactile transition-all cursor-pointer active:translate-y-0.5"
+                      className="py-3.5 px-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm flex items-center justify-center gap-2 shadow-tactile transition-all cursor-pointer active:translate-y-0.5"
+                      title={`Call ${member.name}`}
                     >
                       <Phone className="w-5 h-5 fill-current" />
                       <span>Call</span>
                     </button>
 
                     <button
-                      onClick={() => handleStartCall(member, 'video')}
-                      type="button"
-                      className="py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black text-xs flex flex-col items-center justify-center gap-1 shadow-tactile transition-all cursor-pointer active:translate-y-0.5"
-                    >
-                      <Video className="w-5 h-5" />
-                      <span>Video</span>
-                    </button>
-
-                    <button
                       onClick={() => handleOpenChat(member)}
                       type="button"
-                      className="py-3 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-black text-xs flex flex-col items-center justify-center gap-1 shadow-tactile transition-all cursor-pointer active:translate-y-0.5"
+                      className="py-3.5 px-3 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-black text-sm flex items-center justify-center gap-2 shadow-tactile transition-all cursor-pointer active:translate-y-0.5"
+                      title="Send message"
                     >
                       <MessageSquare className="w-5 h-5" />
                       <span>Chat</span>
@@ -475,20 +484,12 @@ export const FamilyCallingPage: React.FC = () => {
                     <Info className="w-4 h-4" />
                   </button>
                   <button
-                    onClick={() => handleStartCall(member, 'voice')}
+                    onClick={() => handleInitiateCall(member)}
                     type="button"
                     className="p-2.5 rounded-xl bg-emerald-100 hover:bg-emerald-200 text-emerald-800 cursor-pointer transition-colors"
-                    title="Voice Call"
+                    title={`Call ${member.name}`}
                   >
                     <Phone className="w-4 h-4 fill-current" />
-                  </button>
-                  <button
-                    onClick={() => handleStartCall(member, 'video')}
-                    type="button"
-                    className="p-2.5 rounded-xl bg-blue-100 hover:bg-blue-200 text-blue-800 cursor-pointer transition-colors"
-                    title="Video Call"
-                  >
-                    <Video className="w-4 h-4" />
                   </button>
                   <button
                     onClick={() => handleOpenChat(member)}
@@ -516,250 +517,148 @@ export const FamilyCallingPage: React.FC = () => {
         </div>
       </div>
 
-      {/* REALISTIC VOICE CALL MODAL */}
-      {activeCall && activeCall.type === 'voice' && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-gradient-to-b from-gray-900 to-black text-white w-full max-w-sm rounded-3xl p-8 shadow-2xl border border-white/20 text-center flex flex-col items-center">
-            {/* Status indicator */}
-            <div className="inline-flex items-center gap-2 bg-emerald-500/20 text-emerald-400 px-3 py-1 rounded-full text-xs font-bold mb-6 border border-emerald-500/30">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-              <span>Connected • HD Audio</span>
-            </div>
-
-            {/* Profile Avatar with Audio Pulse Ring */}
-            <div className="relative mb-6">
-              <div className="absolute inset-0 rounded-full bg-emerald-500/30 animate-ping scale-110" />
+      {/* ── REAL PHONE CALL CONFIRMATION MODAL ── */}
+      {callConfirmContact && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+        >
+          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl border-2 border-emerald-300 text-center relative animate-in zoom-in-95">
+            <div className="relative mb-4 mx-auto w-24 h-24">
               <img
-                src={activeCall.member.photoUrl}
-                alt={activeCall.member.name}
-                className="w-32 h-32 rounded-full object-cover border-4 border-emerald-400 shadow-2xl relative z-10"
+                src={callConfirmContact.photoUrl}
+                alt={callConfirmContact.name}
+                className="w-24 h-24 rounded-2xl object-cover border-4 border-emerald-400 shadow-md mx-auto"
               />
-            </div>
-
-            <h3 className="text-2xl font-black">{activeCall.member.name}</h3>
-            <p className="text-sm font-semibold text-emerald-300 mt-1">
-              {typeof activeCall.member.relationship === 'string'
-                ? activeCall.member.relationship
-                : activeCall.member.relationship[currentLang] || activeCall.member.relationship.en}
-            </p>
-
-            {/* Call Duration Timer */}
-            <div className="text-3xl font-mono font-bold tracking-widest text-white mt-4 mb-8">
-              {formatTimer(activeCall.timer)}
-            </div>
-
-            {/* Controls: Mute, Speaker, End Call */}
-            <div className="flex items-center justify-center gap-6 w-full">
-              <button
-                onClick={() =>
-                  setActiveCall((prev) => (prev ? { ...prev, isMuted: !prev.isMuted } : null))
-                }
-                type="button"
-                className={`p-4 rounded-full border transition-all cursor-pointer ${
-                  activeCall.isMuted
-                    ? 'bg-red-500/20 border-red-500 text-red-400'
-                    : 'bg-white/10 border-white/20 text-white hover:bg-white/20'
-                }`}
-                title="Mute microphone"
-              >
-                {activeCall.isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
-              </button>
-
-              <button
-                onClick={handleEndCall}
-                type="button"
-                className="p-5 rounded-full bg-red-600 hover:bg-red-700 text-white shadow-xl scale-110 active:scale-95 transition-transform cursor-pointer"
-                title="End Call"
-              >
-                <PhoneOff className="w-8 h-8 fill-current" />
-              </button>
-
-              <button
-                onClick={() =>
-                  setActiveCall((prev) => (prev ? { ...prev, isSpeaker: !prev.isSpeaker } : null))
-                }
-                type="button"
-                className={`p-4 rounded-full border transition-all cursor-pointer ${
-                  activeCall.isSpeaker
-                    ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400'
-                    : 'bg-white/10 border-white/20 text-white hover:bg-white/20'
-                }`}
-                title="Speakerphone"
-              >
-                {activeCall.isSpeaker ? <Volume2 className="w-6 h-6" /> : <VolumeX className="w-6 h-6" />}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* REALISTIC VIDEO CALL MODAL */}
-      {activeCall && activeCall.type === 'video' && (
-        <div className="fixed inset-0 z-50 bg-black flex items-center justify-center p-2 sm:p-6 animate-in fade-in duration-200">
-          <div className="relative w-full max-w-3xl h-[85vh] rounded-3xl overflow-hidden shadow-2xl border border-white/20 bg-gray-900 flex flex-col justify-between">
-            {/* Main Simulated Remote Video Stream */}
-            <div className="absolute inset-0 z-0">
-              <img
-                src={activeCall.member.photoUrl}
-                alt={activeCall.member.name}
-                className="w-full h-full object-cover filter brightness-90"
-              />
-              <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/80" />
-            </div>
-
-            {/* Top Bar with Name and Live Timer */}
-            <div className="relative z-10 p-6 flex items-center justify-between text-white">
-              <div>
-                <h3 className="text-xl font-black">{activeCall.member.name}</h3>
-                <span className="text-xs font-semibold text-emerald-300">
-                  Video Call Active • 1080p
-                </span>
-              </div>
-              <div className="bg-black/50 backdrop-blur-md px-4 py-1.5 rounded-full font-mono text-sm font-bold border border-white/20">
-                {formatTimer(activeCall.timer)}
-              </div>
-            </div>
-
-            {/* PIP Local Camera Self View */}
-            <div className="absolute right-6 bottom-28 z-10 w-28 sm:w-36 h-36 sm:h-48 rounded-2xl overflow-hidden border-2 border-white shadow-2xl bg-black">
-              <img
-                src={currentUser?.avatarUrl || 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=300&auto=format&fit=crop&q=80'}
-                alt="My camera"
-                className="w-full h-full object-cover"
-              />
-              <span className="absolute bottom-1 left-2 text-[10px] font-bold text-white bg-black/60 px-1.5 py-0.5 rounded">
-                You
+              <span className="absolute -bottom-1 -right-1 bg-emerald-600 text-white p-1.5 rounded-xl shadow-xs">
+                <Phone className="w-4 h-4 fill-current" />
               </span>
             </div>
 
-            {/* Bottom Call Controls */}
-            <div className="relative z-10 p-6 flex items-center justify-center gap-5">
+            <h3 className="text-xl font-black text-gray-900">{callConfirmContact.name}</h3>
+            <p className="text-xs font-bold text-emerald-700 uppercase tracking-wider mt-0.5">
+              {typeof callConfirmContact.relationship === 'string'
+                ? callConfirmContact.relationship
+                : callConfirmContact.relationship[currentLang] || callConfirmContact.relationship.en}
+            </p>
+
+            <div className="my-5 p-3 rounded-2xl bg-emerald-50 border border-emerald-200 text-center">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-800 mb-0.5">
+                Phone Number
+              </p>
+              <p className="text-2xl font-black font-mono text-emerald-950 tracking-wider">
+                {callConfirmContact.phone}
+              </p>
+            </div>
+
+            <p className="text-xs text-gray-500 mb-6 leading-relaxed">
+              Clicking <strong>Call Now</strong> will open your phone dialer. On computer without calling apps, you can dial this number directly on your mobile handset.
+            </p>
+
+            <div className="flex items-center gap-3">
               <button
-                onClick={() =>
-                  setActiveCall((prev) => (prev ? { ...prev, isMuted: !prev.isMuted } : null))
-                }
                 type="button"
-                className={`p-4 rounded-full border transition-all cursor-pointer ${
-                  activeCall.isMuted
-                    ? 'bg-red-500/80 border-red-400 text-white'
-                    : 'bg-black/60 backdrop-blur-md border-white/30 text-white hover:bg-black/80'
-                }`}
+                onClick={() => setCallConfirmContact(null)}
+                className="flex-1 py-3 px-4 rounded-xl border border-gray-300 font-bold text-xs text-gray-700 hover:bg-gray-100 transition-all cursor-pointer"
               >
-                {activeCall.isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+                Cancel
               </button>
 
               <button
-                onClick={() =>
-                  setActiveCall((prev) => (prev ? { ...prev, isVideoActive: !prev.isVideoActive } : null))
-                }
                 type="button"
-                className={`p-4 rounded-full border transition-all cursor-pointer ${
-                  !activeCall.isVideoActive
-                    ? 'bg-red-500/80 border-red-400 text-white'
-                    : 'bg-black/60 backdrop-blur-md border-white/30 text-white hover:bg-black/80'
-                }`}
+                onClick={() => handleConfirmRealDial(callConfirmContact)}
+                className="flex-1 py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs shadow-tactile transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95"
               >
-                {activeCall.isVideoActive ? <Camera className="w-6 h-6" /> : <CameraOff className="w-6 h-6" />}
-              </button>
-
-              <button
-                onClick={handleEndCall}
-                type="button"
-                className="p-5 rounded-full bg-red-600 hover:bg-red-700 text-white shadow-2xl active:scale-95 transition-transform cursor-pointer"
-              >
-                <PhoneOff className="w-8 h-8 fill-current" />
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* QUICK MESSAGING MODAL */}
-      {activeChat && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl border border-gray-200 overflow-hidden flex flex-col h-[600px]">
-            {/* Chat Header */}
-            <div className="p-4 bg-sathi-600 text-white flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <img
-                  src={activeChat.member.photoUrl}
-                  alt={activeChat.member.name}
-                  className="w-12 h-12 rounded-2xl object-cover border-2 border-white"
-                />
-                <div>
-                  <h3 className="font-bold text-base leading-tight">{activeChat.member.name}</h3>
-                  <p className="text-xs text-amber-200">
-                    {typeof activeChat.member.relationship === 'string'
-                      ? activeChat.member.relationship
-                      : activeChat.member.relationship.en} • Family Chat
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setActiveChat(null)}
-                type="button"
-                className="p-2 rounded-xl bg-white/20 hover:bg-white/30 text-white cursor-pointer font-bold"
-              >
-                ✕
-              </button>
-            </div>
-
-            {/* Chat History */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-[#FAF7F2]">
-              {activeChat.messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`flex flex-col ${msg.isFromElderly ? 'items-end' : 'items-start'}`}
-                >
-                  <div
-                    className={`max-w-[80%] p-3.5 rounded-2xl text-sm font-semibold shadow-xs ${
-                      msg.isFromElderly
-                        ? 'bg-sathi-600 text-white rounded-br-none'
-                        : 'bg-white text-gray-900 border border-gray-200 rounded-bl-none'
-                    }`}
-                  >
-                    {msg.text}
-                  </div>
-                  <span className="text-[10px] text-gray-400 mt-1 font-mono">{msg.timestamp}</span>
-                </div>
-              ))}
-            </div>
-
-            {/* 1-Tap Quick Elder Phrases */}
-            <div className="p-3 bg-white border-t border-gray-100 overflow-x-auto scrollbar-none flex gap-2">
-              {quickPhrases.map((phrase, idx) => (
-                <button
-                  key={idx}
-                  onClick={() => handleSendMessage(phrase)}
-                  type="button"
-                  className="px-3 py-1.5 rounded-full bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold whitespace-nowrap cursor-pointer transition-all"
-                >
-                  {phrase}
-                </button>
-              ))}
-            </div>
-
-            {/* Input Bar */}
-            <div className="p-3 bg-white border-t border-gray-200 flex items-center gap-2">
-              <input
-                type="text"
-                value={activeChat.input}
-                onChange={(e) => setActiveChat({ ...activeChat, input: e.target.value })}
-                onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                placeholder="Type your message..."
-                className="flex-1 bg-gray-50 border border-gray-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:outline-none focus:ring-2 focus:ring-sathi-500"
-              />
-              <button
-                onClick={() => handleSendMessage()}
-                type="button"
-                className="p-2.5 rounded-xl bg-sathi-600 hover:bg-sathi-700 text-white shadow-sm cursor-pointer"
-              >
-                <Send className="w-5 h-5" />
+                <Phone className="w-4 h-4 fill-current" />
+                <span>Call Now</span>
               </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* ── POST-DIAL NOTIFICATION / DESKTOP GRACEFUL DIALOG ── */}
+      {dialingInfo && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+        >
+          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl border border-gray-200 text-center relative animate-in zoom-in-95">
+            <div className="w-14 h-14 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto mb-3">
+              <Phone className="w-7 h-7 fill-current animate-bounce" />
+            </div>
+
+            <h3 className="text-lg font-black text-gray-900 mb-1">
+              Dialing {dialingInfo.member.name}
+            </h3>
+
+            <p className="text-xs text-gray-600 leading-relaxed mb-4">
+              Your device phone application has been opened with the contact number:
+            </p>
+
+            <div className="p-3 bg-gray-50 rounded-2xl border border-gray-200 flex items-center justify-between gap-2 mb-4">
+              <span className="font-mono text-lg font-black text-gray-900">
+                {dialingInfo.phone}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(dialingInfo.phone);
+                  setCopiedDialPhone(true);
+                  setTimeout(() => setCopiedDialPhone(false), 2000);
+                }}
+                className="px-2.5 py-1.5 rounded-lg bg-emerald-100 text-emerald-800 text-xs font-bold flex items-center gap-1 hover:bg-emerald-200 transition-colors cursor-pointer"
+              >
+                {copiedDialPhone ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedDialPhone ? 'Copied' : 'Copy'}</span>
+              </button>
+            </div>
+
+            <p className="text-[11px] text-gray-500 mb-5 leading-normal">
+              Please complete and speak the call on your phone or dialer window. MIND SATHI never records private phone conversations.
+            </p>
+
+            <button
+              type="button"
+              onClick={() => {
+                setDialingInfo(null);
+                setCopiedDialPhone(false);
+              }}
+              className="w-full py-3 rounded-xl bg-gray-900 text-white font-extrabold text-xs hover:bg-gray-800 transition-all cursor-pointer"
+            >
+              Done / Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── REAL PATIENT-CAREGIVER CHAT MODAL ── */}
+      <PatientCaregiverChatModal
+        isOpen={showChatModal}
+        onClose={() => setShowChatModal(false)}
+        partner={
+          assignedCaregiver
+            ? {
+                id: assignedCaregiver.id,
+                name: assignedCaregiver.preferredName || assignedCaregiver.name,
+                preferredName: assignedCaregiver.preferredName,
+                role: 'caregiver',
+                avatarUrl: assignedCaregiver.avatarUrl,
+                phone: assignedCaregiver.phone,
+                relationship: 'Family Caregiver',
+              }
+            : null
+        }
+        currentUserId={currentUser?.id || ''}
+        currentUserRole="elderly"
+        isPartnerLinked={Boolean(assignedCaregiver)}
+        patientConnectionCode={
+          currentUser?.connectionCode ||
+          ('MS-' + (currentUser?.id || '').replace(/-/g, '').substring(0, 6).toUpperCase())
+        }
+      />
 
       {/* ADD MEMBER MODAL */}
       {showAddModal && (
@@ -767,11 +666,10 @@ export const FamilyCallingPage: React.FC = () => {
           <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl border border-gray-200">
             <h3 className="text-xl font-bold text-gray-900 mb-1">Add Family Member</h3>
             <p className="text-xs text-gray-500 mb-4">
-              Add children, grandchildren or caregiver contacts for 1-tap calling.
+              Add children, grandchildren or caregiver contacts for 1-tap phone dialing.
             </p>
 
             <form onSubmit={handleAddMember} className="space-y-4">
-              {/* Photo picker */}
               <div>
                 <label className="block text-xs font-bold text-gray-700 mb-2">Photo (optional)</label>
                 <div className="flex items-center gap-4">
@@ -795,7 +693,6 @@ export const FamilyCallingPage: React.FC = () => {
                       <p className="text-[10px] text-gray-500 truncate max-w-[160px]">{photoFile.name}</p>
                     )}
                   </div>
-                  {/* Hidden file input */}
                   <input
                     ref={fileInputRef}
                     type="file"
@@ -884,7 +781,6 @@ export const FamilyCallingPage: React.FC = () => {
       {selectedDetailMember && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200">
           <div className="bg-white w-full max-w-lg rounded-3xl p-6 sm:p-8 shadow-2xl border border-gray-200 relative overflow-hidden">
-            {/* Close Button */}
             <button
               onClick={() => setSelectedDetailMember(null)}
               type="button"
@@ -893,9 +789,7 @@ export const FamilyCallingPage: React.FC = () => {
               <X className="w-5 h-5" />
             </button>
 
-            {/* Header with Photo & Details */}
             <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6 mb-6">
-              {/* Large Photo with Update Option */}
               <div className="flex flex-col items-center gap-2.5 shrink-0">
                 <div className="relative group">
                   <div className="w-32 h-32 sm:w-36 sm:h-36 rounded-3xl overflow-hidden shadow-lg border-4 border-amber-300/80 bg-gray-100">
@@ -918,7 +812,6 @@ export const FamilyCallingPage: React.FC = () => {
                   )}
                 </div>
 
-                {/* Change / Update Photo Button */}
                 <button
                   type="button"
                   disabled={isUpdatingDetailPhoto}
@@ -938,7 +831,6 @@ export const FamilyCallingPage: React.FC = () => {
                 />
               </div>
 
-              {/* Info Details */}
               <div className="flex-1 text-center sm:text-left space-y-2.5">
                 <div className="flex items-center justify-center sm:justify-start gap-2">
                   <h3 className="text-2xl font-black text-gray-900 leading-tight">
@@ -949,27 +841,12 @@ export const FamilyCallingPage: React.FC = () => {
                   )}
                 </div>
 
-                {/* Relationship Tag with Multilingual Labels */}
                 <div className="inline-flex flex-wrap items-center gap-1.5 justify-center sm:justify-start">
                   <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-900 font-extrabold text-xs">
                     {typeof selectedDetailMember.relationship === 'string'
                       ? selectedDetailMember.relationship
                       : selectedDetailMember.relationship[currentLang] || selectedDetailMember.relationship.en}
                   </span>
-                  {typeof selectedDetailMember.relationship !== 'string' && (
-                    <>
-                      {selectedDetailMember.relationship.hi && (
-                        <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[11px] font-semibold">
-                          {selectedDetailMember.relationship.hi}
-                        </span>
-                      )}
-                      {selectedDetailMember.relationship.as && (
-                        <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[11px] font-semibold">
-                          {selectedDetailMember.relationship.as}
-                        </span>
-                      )}
-                    </>
-                  )}
                 </div>
 
                 <p className="text-sm font-semibold text-gray-700 flex items-center justify-center sm:justify-start gap-2 font-mono pt-1">
@@ -984,37 +861,24 @@ export const FamilyCallingPage: React.FC = () => {
                 )}
 
                 <div className="text-[11px] text-gray-400 pt-1">
-                  ✓ Photo synced for Family Recognition Game & 1-Tap Calling
+                  ✓ Photo synced for Family Recognition & Real Phone Calling
                 </div>
               </div>
             </div>
 
-            {/* Quick Action Calling Buttons */}
-            <div className="grid grid-cols-3 gap-3 pt-4 border-t border-gray-100">
+            {/* Quick Action Buttons (Video Call Removed) */}
+            <div className="grid grid-cols-2 gap-3 pt-4 border-t border-gray-100">
               <button
                 onClick={() => {
                   const m = selectedDetailMember;
                   setSelectedDetailMember(null);
-                  handleStartCall(m, 'voice');
+                  handleInitiateCall(m);
                 }}
                 type="button"
-                className="py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs flex flex-col items-center justify-center gap-1 shadow-tactile transition-all cursor-pointer"
+                className="py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-xs flex items-center justify-center gap-2 shadow-tactile transition-all cursor-pointer"
               >
                 <Phone className="w-5 h-5 fill-current" />
-                <span>Voice Call</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  const m = selectedDetailMember;
-                  setSelectedDetailMember(null);
-                  handleStartCall(m, 'video');
-                }}
-                type="button"
-                className="py-3 rounded-2xl bg-blue-600 hover:bg-blue-700 text-white font-black text-xs flex flex-col items-center justify-center gap-1 shadow-tactile transition-all cursor-pointer"
-              >
-                <Video className="w-5 h-5" />
-                <span>Video Call</span>
+                <span>Call Phone</span>
               </button>
 
               <button
@@ -1024,7 +888,7 @@ export const FamilyCallingPage: React.FC = () => {
                   handleOpenChat(m);
                 }}
                 type="button"
-                className="py-3 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-black text-xs flex flex-col items-center justify-center gap-1 shadow-tactile transition-all cursor-pointer"
+                className="py-3 rounded-2xl bg-amber-500 hover:bg-amber-600 text-white font-black text-xs flex items-center justify-center gap-2 shadow-tactile transition-all cursor-pointer"
               >
                 <MessageSquare className="w-5 h-5" />
                 <span>Chat Message</span>

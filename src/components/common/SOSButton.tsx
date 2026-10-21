@@ -34,11 +34,11 @@ export const SOSButton: React.FC = () => {
       <button
         onClick={() => setIsOpen(true)}
         type="button"
-        className="flex items-center gap-2 bg-red-600 hover:bg-red-700 text-white px-3.5 py-2 rounded-2xl font-bold shadow-tactile border border-red-800 transition-all cursor-pointer text-sm sm:text-base animate-pulse-subtle"
+        className="flex items-center gap-1.5 bg-red-600 hover:bg-red-700 text-white px-2.5 sm:px-3 py-1.5 rounded-xl font-extrabold shadow-sm border border-red-700 transition-all cursor-pointer text-xs sm:text-sm"
         aria-label="Emergency Caregiver SOS"
       >
-        <ShieldAlert className="w-5 h-5 shrink-0" />
-        <span className="hidden xs:inline">{currentLang === 'hi' ? 'सहायता (SOS)' : currentLang === 'as' ? 'সাহায্য (SOS)' : 'Help (SOS)'}</span>
+        <ShieldAlert className="w-4 h-4 shrink-0" />
+        <span className="hidden xs:inline">{currentLang === 'hi' ? 'मदद (SOS)' : currentLang === 'as' ? 'সাহায্য (SOS)' : 'Help (SOS)'}</span>
         <span className="xs:hidden">SOS</span>
       </button>
 

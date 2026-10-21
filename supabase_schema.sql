@@ -983,3 +983,84 @@ GRANT EXECUTE ON FUNCTION public.stop_live_location(UUID) TO authenticated;
 
 REVOKE ALL ON FUNCTION public.patient_start_live_location() FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.patient_start_live_location() TO authenticated;
+
+-- ==============================================================================
+-- 8. PATIENT ↔ CAREGIVER SECURE MESSAGES TABLE & RLS POLICIES
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS public.messages (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  sender_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  receiver_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  message TEXT NOT NULL CHECK (char_length(trim(message)) > 0),
+  is_read BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON public.messages(sender_id, receiver_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_messages_receiver ON public.messages(receiver_id, is_read);
+CREATE INDEX IF NOT EXISTS idx_messages_created_at ON public.messages(created_at);
+
+ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Messages select access" ON public.messages;
+DROP POLICY IF EXISTS "Messages insert access" ON public.messages;
+DROP POLICY IF EXISTS "Participants can view their own messages" ON public.messages;
+DROP POLICY IF EXISTS "Participants can insert messages in active relationship" ON public.messages;
+DROP POLICY IF EXISTS "Receivers can update read status" ON public.messages;
+
+-- RLS: Only participants with an approved caregiver_patient relationship can read messages
+CREATE POLICY "Participants can view their own messages"
+  ON public.messages FOR SELECT
+  TO authenticated
+  USING (
+    (auth.uid() = sender_id OR auth.uid() = receiver_id)
+    AND EXISTS (
+      SELECT 1 FROM public.caregiver_patient cp
+      WHERE (
+        (cp.patient_id = messages.sender_id AND cp.caregiver_id = messages.receiver_id)
+        OR
+        (cp.patient_id = messages.receiver_id AND cp.caregiver_id = messages.sender_id)
+      )
+    )
+  );
+
+-- RLS: Senders must match auth.uid() and can only insert to their approved linked partner
+CREATE POLICY "Participants can insert messages in active relationship"
+  ON public.messages FOR INSERT
+  TO authenticated
+  WITH CHECK (
+    auth.uid() = sender_id
+    AND EXISTS (
+      SELECT 1 FROM public.caregiver_patient cp
+      WHERE (
+        (cp.patient_id = auth.uid() AND cp.caregiver_id = messages.receiver_id)
+        OR
+        (cp.caregiver_id = auth.uid() AND cp.patient_id = messages.receiver_id)
+      )
+    )
+  );
+
+-- RLS: Only receiver can update read status
+CREATE POLICY "Receivers can update read status"
+  ON public.messages FOR UPDATE
+  TO authenticated
+  USING (
+    auth.uid() = receiver_id
+  )
+  WITH CHECK (
+    auth.uid() = receiver_id
+  );
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND tablename = 'messages'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;
+  END IF;
+EXCEPTION
+  WHEN OTHERS THEN NULL;
+END;
+$$;
+

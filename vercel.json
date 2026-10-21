@@ -6,6 +6,14 @@
       "destination": "/api/$1"
     },
     {
+      "source": "/caregiver",
+      "destination": "/caregiver.html"
+    },
+    {
+      "source": "/caregiver/(.*)",
+      "destination": "/caregiver.html"
+    },
+    {
       "source": "/(.*)",
       "destination": "/index.html"
     }

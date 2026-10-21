@@ -91,13 +91,12 @@ export const SyncStatusIndicator: React.FC = () => {
       <button
         type="button"
         onClick={() => setShowModal(true)}
-        className={`flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-2xl border font-extrabold text-xs transition-all cursor-pointer shadow-2xs ${btnConfig.containerClass}`}
+        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border font-extrabold text-xs transition-all cursor-pointer shadow-2xs ${btnConfig.containerClass}`}
         title={`${btnConfig.label} (Click to inspect or sync)`}
         aria-label={btnConfig.label}
       >
         {btnConfig.icon}
-        <span className="hidden md:inline">{btnConfig.label}</span>
-        <span className="hidden xs:inline md:hidden">{btnConfig.shortLabel}</span>
+        <span>{btnConfig.shortLabel}</span>
       </button>
 
       {/* Sync Details Modal */}

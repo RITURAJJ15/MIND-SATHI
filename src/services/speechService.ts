@@ -71,11 +71,6 @@ class SpeechService {
         case 'hi':  langTag = 'hi-IN'; break;
         case 'as':  langTag = 'as-IN'; break;
         case 'bn':  langTag = 'bn-IN'; break;
-        case 'mni': langTag = 'mni-IN'; break;
-        case 'lus': langTag = 'en-IN'; break; // Mizo tone fallback
-        case 'kha': langTag = 'en-IN'; break; // Khasi tone fallback
-        case 'grt': langTag = 'en-IN'; break; // Garo tone fallback
-        case 'brx': langTag = 'hi-IN'; break; // Bodo Devanagari script voice
         default:    langTag = 'en-IN'; break;
       }
 

@@ -4,12 +4,7 @@ export type SupportedLanguage =
   | 'en'   // English
   | 'hi'   // Hindi
   | 'as'   // Assamese (অসমীয়া)
-  | 'bn'   // Bengali (বাংলা)
-  | 'mni'  // Manipuri / Meitei (মৈতৈলোন্)
-  | 'lus'  // Mizo (Mizo ṭawng)
-  | 'kha'  // Khasi (Ka Ktien Khasi)
-  | 'grt'  // Garo (A·chik)
-  | 'brx'; // Bodo (बर')
+  | 'bn';  // Bengali (বাংলা)
 
 export interface EmergencyContact {
   name: string;

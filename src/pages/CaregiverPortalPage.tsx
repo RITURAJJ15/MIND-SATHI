@@ -43,9 +43,11 @@ import {
   MapPin,
   Radio,
   Zap,
+  MessageSquare,
 } from 'lucide-react';
 import { GoogleSignInButton } from '../components/common/GoogleSignInButton';
 import { CaregiverLiveLocationModal } from '../components/location/CaregiverLiveLocationModal';
+import { PatientCaregiverChatModal } from '../components/chat/PatientCaregiverChatModal';
 import { supabase } from '../lib/supabase';
 
 export const CaregiverPortalPage: React.FC = () => {
@@ -146,6 +148,7 @@ export const CaregiverPortalPage: React.FC = () => {
   const [availablePatients, setAvailablePatients] = useState<any[]>([]);
   const [showLinkModal, setShowLinkModal] = useState(false);
   const [showLiveLocationModal, setShowLiveLocationModal] = useState(false);
+  const [showChatModal, setShowChatModal] = useState(false);
   const [isLoadingPatients, setIsLoadingPatients] = useState<boolean>(true);
   const [patientGameSessions, setPatientGameSessions] = useState<any[]>([]);
 
@@ -852,7 +855,15 @@ export const CaregiverPortalPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center gap-3 relative z-10 shrink-0">
+        <div className="flex flex-wrap items-center gap-2.5 relative z-10 shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowChatModal(true)}
+            className="w-full sm:w-auto px-5 py-3.5 bg-amber-500 hover:bg-amber-400 text-amber-950 font-black text-xs rounded-xl shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-98"
+          >
+            <MessageSquare className="w-4 h-4 text-amber-950" />
+            <span>Chat with Patient</span>
+          </button>
           <button
             type="button"
             onClick={() => setShowLiveLocationModal(true)}
@@ -897,7 +908,17 @@ export const CaregiverPortalPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowChatModal(true)}
+              className="text-xs font-extrabold text-white bg-sathi-600 hover:bg-sathi-700 px-3.5 py-2 rounded-xl transition-all cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-98"
+              title="Open secure chat with patient"
+            >
+              <MessageSquare className="w-3.5 h-3.5 text-white" />
+              <span>Chat with Patient</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setShowLiveLocationModal(true)}
@@ -1483,6 +1504,30 @@ export const CaregiverPortalPage: React.FC = () => {
           onClose={() => setShowLiveLocationModal(false)}
           patientId={selectedPatient.id}
           patientName={selectedPatient.full_name || selectedPatient.name || 'Patient'}
+        />
+      )}
+
+      {/* Realtime Patient-Caregiver Chat Modal */}
+      {showChatModal && (
+        <PatientCaregiverChatModal
+          isOpen={showChatModal}
+          onClose={() => setShowChatModal(false)}
+          partner={
+            selectedPatient
+              ? {
+                  id: selectedPatient.id,
+                  name: selectedPatient.full_name || selectedPatient.name,
+                  preferredName: selectedPatient.preferred_name,
+                  role: 'elderly',
+                  avatarUrl: selectedPatient.profile_photo_url || selectedPatient.avatarUrl,
+                  phone: selectedPatient.phone,
+                  relationship: 'Patient',
+                }
+              : null
+          }
+          currentUserId={activeCaregiverUser?.id || currentUser?.id || ''}
+          currentUserRole="caregiver"
+          isPartnerLinked={Boolean(selectedPatient)}
         />
       )}
     </div>

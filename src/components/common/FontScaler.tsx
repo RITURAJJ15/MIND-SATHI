@@ -11,7 +11,7 @@ export const FontScaler: React.FC = () => {
   ];
 
   return (
-    <div className="inline-flex items-center gap-1 bg-gray-100 p-1 rounded-2xl border border-gray-300">
+    <div className="inline-flex items-center p-0.5 rounded-lg">
       {options.map((opt) => {
         const isActive = settings.fontSize === opt.key;
         return (
@@ -20,12 +20,10 @@ export const FontScaler: React.FC = () => {
             onClick={() => setFontSize(opt.key)}
             title={opt.title}
             type="button"
-            className={`px-2.5 py-1 rounded-xl font-bold transition-all duration-150 cursor-pointer ${
-              opt.key === 'normal' ? 'text-xs' : opt.key === 'large' ? 'text-sm' : 'text-base'
-            } ${
+            className={`px-2 py-1 rounded-md text-xs font-black transition-all duration-150 cursor-pointer ${
               isActive
-                ? 'bg-gray-800 text-white shadow-sm'
-                : 'text-gray-700 hover:bg-gray-200'
+                ? 'bg-gray-800 text-white shadow-xs'
+                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-200/60'
             }`}
           >
             {opt.label}
