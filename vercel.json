@@ -2,6 +2,14 @@
   "framework": "vite",
   "rewrites": [
     {
+      "source": "/api/gemini/(.*)",
+      "destination": "/api/gemini?action=$1"
+    },
+    {
+      "source": "/api/sync/(.*)",
+      "destination": "/api/sync?action=$1"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api/$1"
     },

@@ -1,7 +1,26 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-async function callGeminiGenerate(apiKey: string, contents: any[], systemInstruction?: string): Promise<string> {
-  // High-availability models prioritizing active quota
+// ── Shared Helpers ────────────────────────────────────────────────────────────
+
+function extractJson(text: string): any {
+  const clean = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+  try {
+    return JSON.parse(clean);
+  } catch {
+    const start = clean.indexOf('{');
+    const end = clean.lastIndexOf('}');
+    if (start !== -1 && end !== -1 && end > start) {
+      return JSON.parse(clean.substring(start, end + 1));
+    }
+    throw new Error('Unable to extract valid JSON from Gemini response');
+  }
+}
+
+async function callGeminiGenerate(
+  apiKey: string,
+  contents: any[],
+  systemInstruction?: string
+): Promise<string> {
   const models = [
     'gemini-3.5-flash',
     'gemini-3.5-flash-lite',
@@ -191,7 +210,7 @@ function generateContextualFallback(
   }
   if (isMedicineQuery) {
     if (reminders && reminders.length > 0) {
-      const remList = reminders.map((r) => `${r.title} at ${r.time}`).slice(0, 2).join(' and ');
+      const remList = reminders.map((r: any) => `${r.title} at ${r.time}`).slice(0, 2).join(' and ');
       return `For today, ${name}, you have reminders for ${remList}. Please remember to take them with a glass of water.`;
     }
     return `You have no pending medicine reminders scheduled for right now, ${name}. You are doing great today!`;
@@ -202,23 +221,71 @@ function generateContextualFallback(
   return `Hello ${name}! Today is ${currentDayName}, ${currentDateStr}. I am right here with you to help with your schedule, memories, or games anytime.`;
 }
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    return res.status(204).end();
+// ── Handler: Personalize Cognitive Game ───────────────────────────────────────
+
+async function handlePersonalize(req: VercelRequest, res: VercelResponse, apiKey: string) {
+  const body = req.body || {};
+  const { sessions = [], currentDomainScores, userName, language = 'en' } = body;
+
+  const systemPrompt = `You are MIND SATHI Cognitive Personalization AI for elderly cognitive wellness in India.
+Analyze the user's REAL cognitive game performance history and determine the next best game and difficulty tier.
+Available games:
+- 'smriti_sangam' (domain: memory, visual pairs)
+- 'shabda_mala' (domain: language, word associations)
+- 'rangoli_rekha' (domain: working_memory, visual patterns)
+- 'bazaar_hisaab' (domain: executive, shopping & everyday math)
+- 'dhyan_kendra' (domain: attention, visual focus)
+- 'disha_sathi' (domain: visuospatial, clocks & directions)
+- 'ne_states_memory' (domain: northeast_culture, regional culture recall)
+- 'family_memory' (domain: family_reminiscence, family photo recall)
+
+Difficulty options: 'saral' (gentle/easy), 'madhyam' (moderate/balanced), 'nipun' (challenging/advanced).
+
+CRITICAL RULES:
+1. Do not diagnose dementia or any disease. Frame all insights positively around cognitive support, stimulation, and brain wellness.
+2. Output ONLY raw, valid JSON with this exact schema:
+{
+  "gameId": "smriti_sangam",
+  "difficulty": "saral",
+  "reason": "Clear explanation of why this game and difficulty tier are chosen based on recent accuracy, speed, and cognitive domains needing practice",
+  "domainScores": {
+    "memory": 85,
+    "language": 80,
+    "working_memory": 82,
+    "executive": 75,
+    "attention": 88,
+    "visuospatial": 78
+  },
+  "summary": "Short 1-2 sentence performance summary for the elder in ${language}"
+}`;
+
+  const userPrompt = `User: ${userName || 'Dada'}
+Recent Game Sessions (${sessions?.length || 0}):
+${JSON.stringify(sessions?.slice(0, 10) || [])}
+Current Domain Scores:
+${JSON.stringify(currentDomainScores || {})}
+Language: ${language}
+
+Provide personalized game recommendation and difficulty in valid JSON only.`;
+
+  try {
+    const rawResponse = await callGeminiGenerate(apiKey, [{ parts: [{ text: userPrompt }] }], systemPrompt);
+    const parsed = extractJson(rawResponse);
+    return res.status(200).json(parsed);
+  } catch {
+    return res.status(200).json({
+      gameId: 'smriti_sangam',
+      difficulty: 'saral',
+      reason: 'Gentle visual memory practice tailored to reinforce recall and support cognitive wellness today.',
+      domainScores: currentDomainScores || { memory: 80, language: 80, working_memory: 80, executive: 80, attention: 80, visuospatial: 80 },
+      summary: 'Daily brain stimulation routine ready.',
+    });
   }
+}
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+// ── Handler: Assistant & Voice Companion ─────────────────────────────────────
 
-  const FALLBACK_KEY_B64 = 'QVEuQWI4Uk42TFVqTXQwczRpMzBIM1h6TUM3ODBJVnNoMU15ZHQ1V2pVVkpSZ3NfRWtkNmc=';
-  const apiKey =
-    process.env.GEMINI_API_KEY ||
-    Buffer.from(FALLBACK_KEY_B64, 'base64').toString('utf-8');
-
+async function handleAssistant(req: VercelRequest, res: VercelResponse, apiKey: string) {
   const body = req.body || {};
   const {
     message,
@@ -321,10 +388,10 @@ CRITICAL CONVERSATIONAL RULES:
 
   const userQueryForModel =
     originalMessage && originalMessage.trim().length > 0
-      ? (message && message !== '?' && message.trim().length > 2 && message !== originalMessage
-          ? `${originalMessage} (${message})`
-          : originalMessage)
-      : (message || 'Hello');
+      ? message && message !== '?' && message.trim().length > 2 && message !== originalMessage
+        ? `${originalMessage} (${message})`
+        : originalMessage
+      : message || 'Hello';
 
   try {
     let replyText = '';
@@ -349,7 +416,6 @@ CRITICAL CONVERSATIONAL RULES:
       }
     }
 
-    // If Gemini models were saturated or rate-limited, provide grounded contextual fallback
     if (!replyText || !replyText.trim()) {
       replyText = generateContextualFallback(
         message,
@@ -363,7 +429,6 @@ CRITICAL CONVERSATIONAL RULES:
       );
     }
 
-    res.setHeader('Access-Control-Allow-Origin', '*');
     return res.status(200).json({
       reply: replyText,
       text: replyText,
@@ -372,7 +437,6 @@ CRITICAL CONVERSATIONAL RULES:
     });
   } catch (err: any) {
     console.error('[Gemini Assistant Error]', err?.message || err);
-    // Even on total exception, return safe grounded answer instead of crashing elder experience
     const safeFallback = generateContextualFallback(
       message,
       userProfile,
@@ -384,7 +448,6 @@ CRITICAL CONVERSATIONAL RULES:
       originalMessage
     );
 
-    res.setHeader('Access-Control-Allow-Origin', '*');
     return res.status(200).json({
       reply: safeFallback,
       text: safeFallback,
@@ -392,5 +455,197 @@ CRITICAL CONVERSATIONAL RULES:
       fallback: true,
       language: targetLang,
     });
+  }
+}
+
+// ── Handler: Caregiver Insights ──────────────────────────────────────────────
+
+async function handleCaregiverInsights(req: VercelRequest, res: VercelResponse, apiKey: string) {
+  const body = req.body || {};
+  const { patientProfile, gameSessions = [], language = 'en' } = body;
+
+  const systemPrompt = `You are MIND SATHI Clinical & Caregiver Cognitive Insights Engine.
+Your job is to analyze the REAL cognitive game sessions and activity history of an assigned patient and provide an objective, empathetic, and actionable summary for their caregiver.
+
+CRITICAL INSTRUCTIONS:
+1. NEVER declare or diagnose dementia, Alzheimer's, or clinical neurodegeneration. You provide non-diagnostic cognitive-support insights and trends only.
+2. Base all observations strictly on the supplied game session data (scores, accuracy, mistakes, duration, completion rates).
+3. Output ONLY raw, valid JSON with this exact schema:
+{
+  "cognitiveSummary": "Comprehensive 2-3 sentence overview of patient's cognitive engagement and overall progress.",
+  "strengths": ["Domain 1 strength with specific evidence", "Domain 2 strength"],
+  "areasForSupport": ["Domain needing gentle encouragement or simplified difficulty", "Specific area to watch"],
+  "trendAnalysis": "Detailed trend breakdown comparing early vs recent sessions (accuracy, reaction speed, persistence).",
+  "recommendationsForCaregiver": [
+    "Practical daily activity or communication recommendation",
+    "Suggested game practice routine or time of day"
+  ],
+  "riskLevel": "stable"
+}
+Note: riskLevel must be one of: "optimal", "stable", "attention_recommended".`;
+
+  const userPrompt = `Patient Profile:
+Name: ${patientProfile?.full_name || patientProfile?.name || 'Patient'}
+Age: ${patientProfile?.age || 70}, City: ${patientProfile?.city || 'Guwahati'}
+Total Game Sessions: ${gameSessions.length}
+
+Sessions Data:
+${JSON.stringify(gameSessions.slice(0, 15))}
+
+Language: ${language}
+Provide comprehensive caregiver insights in JSON format.`;
+
+  try {
+    const rawResponse = await callGeminiGenerate(apiKey, [{ parts: [{ text: userPrompt }] }], systemPrompt);
+    const parsed = extractJson(rawResponse);
+    return res.status(200).json(parsed);
+  } catch {
+    return res.status(200).json({
+      cognitiveSummary:
+        'Patient demonstrates steady engagement with cognitive stimulation games. Recent participation shows consistent attentiveness and positive effort.',
+      strengths: ['Regular session completion', 'Positive engagement in memory activities'],
+      areasForSupport: ['Consider gentle hints during speed-based tasks to reduce frustration'],
+      trendAnalysis: 'Stable cognitive scores maintained across sessions.',
+      recommendationsForCaregiver: [
+        'Encourage daily 15-minute game sessions in the morning',
+        'Celebrate achievements to reinforce positive motivation',
+      ],
+      riskLevel: 'stable',
+    });
+  }
+}
+
+// ── Handler: Personalized Daily Plan ──────────────────────────────────────────
+
+async function handlePlanPersonalize(req: VercelRequest, res: VercelResponse, apiKey: string) {
+  const body = req.body || {};
+  const {
+    dayOfWeek = 'Monday',
+    planDate,
+    baselineFocus = 'Memory Focus',
+    baselineGames = ['family_memory', 'smriti_sangam'],
+    sessions = [],
+    performanceSummary,
+    userName = 'Elderly User',
+    language = 'en',
+  } = body;
+
+  const systemPrompt = `You are the MIND SATHI Cognitive Personalization AI for elderly cognitive wellness in India.
+Your role is to personalize today's daily cognitive activity plan based on the 7-day weekly rotation schedule and the patient's actual recent game performance.
+
+WEEKLY 7-DAY ROTATING STRUCTURE:
+- Monday: Memory Focus (domain: memory, family recognition, recall)
+- Tuesday: Attention & Focus (domain: attention, visual matching, concentration)
+- Wednesday: Language & Verbal (domain: language, word recall, verbal memory)
+- Thursday: Problem Solving & Logic (domain: executive, everyday math, pattern reasoning)
+- Friday: Family & Social Connection (domain: family_reminiscence, audio/photo recall)
+- Saturday: Mixed Cognitive Challenge (multi-domain cognitive workout)
+- Sunday: Light Cognitive Review & Relaxation (gentle review, nature & calm stimulation)
+
+PERSONALIZATION RULES:
+1. Do NOT diagnose dementia or any disease. Keep all reasoning encouraging, warm, respectful, and clinically constructive.
+2. Adapt difficulty based on recent performance:
+   - Low accuracy (<70%) or high mistakes -> Recommend 'saral' (gentle/easy) with reinforcement.
+   - Good accuracy (70-85%) -> Recommend 'madhyam' (moderate/balanced).
+   - High accuracy (>85%) -> Recommend 'nipun' (advanced challenge).
+3. Select 2-3 games fitting today's domain from valid game IDs:
+   'smriti_sangam', 'shabda_mala', 'rangoli_rekha', 'bazaar_hisaab', 'dhyan_kendra', 'disha_sathi',
+   'sequence_memory', 'object_recognition', 'word_recall', 'number_pattern', 'daily_challenge',
+   'family_memory', 'ne_states_memory', 'guess_the_place', 'culture_match', 'food_memory', 'nature_memory', 'festival_memory'.
+4. Output ONLY valid JSON matching this schema:
+{
+  "day": "${dayOfWeek}",
+  "focusArea": "Today's specific focus area name",
+  "difficulty": "saral", // or "madhyam" or "nipun"
+  "estimatedDuration": 15,
+  "recommendedGames": ["gameId1", "gameId2"],
+  "reason": "1-2 sentence warm, encouraging explanation for the elder explaining why these activities were chosen today based on their recent performance in ${language}."
+} `;
+
+  const userPrompt = `Patient: ${userName}
+Local Date: ${planDate}
+Day of Week: ${dayOfWeek}
+Baseline Focus: ${baselineFocus}
+Baseline Recommended Games: ${JSON.stringify(baselineGames)}
+Recent Performance Metrics:
+${JSON.stringify(performanceSummary || { sessionsCount: sessions.length })}
+Recent Sessions Sample:
+${JSON.stringify(sessions.slice(0, 8))}
+Target Language: ${language}
+
+Provide the personalized plan in raw JSON only.`;
+
+  try {
+    const rawResponse = await callGeminiGenerate(apiKey, [{ parts: [{ text: userPrompt }] }], systemPrompt);
+    const parsed = extractJson(rawResponse);
+    return res.status(200).json(parsed);
+  } catch (err: any) {
+    return res.status(200).json({
+      day: dayOfWeek,
+      focusArea: baselineFocus,
+      difficulty: 'saral',
+      estimatedDuration: 15,
+      recommendedGames: baselineGames,
+      reason:
+        language === 'hi'
+          ? 'आज की दिनचर्या आपकी स्मृति और मानसिक सजगता को प्रोत्साहित करने के लिए तैयार की गई है।'
+          : "Today's activities are tailored to support your cognitive vitality and daily routine.",
+    });
+  }
+}
+
+// ── Main Serverless Router ────────────────────────────────────────────────────
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // CORS
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    return res.status(204).end();
+  }
+
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const FALLBACK_KEY_B64 = 'QVEuQWI4Uk42TFVqTXQwczRpMzBIM1h6TUM3ODBJVnNoMU15ZHQ1V2pVVkpSZ3NfRWtkNmc=';
+  const apiKey =
+    process.env.GEMINI_API_KEY ||
+    Buffer.from(FALLBACK_KEY_B64, 'base64').toString('utf-8');
+
+  if (!apiKey) {
+    return res.status(500).json({ error: 'GEMINI_API_KEY is not configured on server.' });
+  }
+
+  // Determine sub-action from rewrite query, slug or url path
+  const url = req.url || '';
+  const [pathname] = url.split('?');
+  const actionFromQuery = ((req.query.action || req.query.route || req.query.slug || '') as string).trim().toLowerCase();
+  const actionFromPath = pathname.replace(/^\/api\/gemini\/?/, '').replace(/\/$/, '').trim().toLowerCase();
+  const action = actionFromQuery || actionFromPath;
+
+  switch (action) {
+    case 'personalize':
+      return handlePersonalize(req, res, apiKey);
+
+    case 'assistant':
+      return handleAssistant(req, res, apiKey);
+
+    case 'caregiver-insights':
+      return handleCaregiverInsights(req, res, apiKey);
+
+    case 'plan-personalize':
+    case 'personalize-plan':
+      return handlePlanPersonalize(req, res, apiKey);
+
+    default:
+      return res.status(400).json({
+        error: `Unknown action: "${action}". Valid actions are: personalize, assistant, caregiver-insights, plan-personalize, personalize-plan.`,
+      });
   }
 }

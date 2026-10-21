@@ -4,14 +4,6 @@
 -- Paste and run this ENTIRE script in your Supabase Dashboard -> SQL Editor
 -- ==============================================================================
 
--- 0. Ensure caregiver_patient table supports status column safely if not already present
-DO $$
-BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'caregiver_patient') THEN
-    ALTER TABLE public.caregiver_patient ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'approved';
-  END IF;
-END $$;
-
 -- 1. Create messages table if it does not already exist
 CREATE TABLE IF NOT EXISTS public.messages (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -39,7 +31,7 @@ DROP POLICY IF EXISTS "Receivers can update read status" ON public.messages;
 
 -- 5. SELECT Policy:
 -- Authenticated users can ONLY view messages where they are the sender or receiver,
--- AND there exists a valid caregiver_patient relationship between the two parties.
+-- AND there exists an approved caregiver_patient relationship between the two parties.
 CREATE POLICY "Participants can view their own messages"
   ON public.messages FOR SELECT
   TO authenticated
@@ -52,6 +44,7 @@ CREATE POLICY "Participants can view their own messages"
         OR
         (cp.patient_id = messages.receiver_id AND cp.caregiver_id = messages.sender_id)
       )
+      AND (cp.status = 'approved' OR cp.status IS NULL)
     )
   );
 
@@ -70,6 +63,7 @@ CREATE POLICY "Participants can insert messages in active relationship"
         OR
         (cp.caregiver_id = auth.uid() AND cp.patient_id = messages.receiver_id)
       )
+      AND (cp.status = 'approved' OR cp.status IS NULL)
     )
   );
 

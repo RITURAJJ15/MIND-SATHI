@@ -35,8 +35,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const url = req.url || '';
-  const [urlPath] = url.split('?');
+  const [rawPath] = url.split('?');
   const query = req.query || {};
+  const actionFromQuery = ((query.action || query.route || '') as string).toLowerCase();
+  const urlPath = `${rawPath} /${actionFromQuery}`;
 
   const token = authHeader.substring(7).trim();
   const {

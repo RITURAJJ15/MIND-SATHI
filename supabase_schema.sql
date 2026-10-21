@@ -1021,6 +1021,7 @@ CREATE POLICY "Participants can view their own messages"
         OR
         (cp.patient_id = messages.receiver_id AND cp.caregiver_id = messages.sender_id)
       )
+      AND (cp.status = 'approved' OR cp.status IS NULL)
     )
   );
 
@@ -1037,6 +1038,7 @@ CREATE POLICY "Participants can insert messages in active relationship"
         OR
         (cp.caregiver_id = auth.uid() AND cp.patient_id = messages.receiver_id)
       )
+      AND (cp.status = 'approved' OR cp.status IS NULL)
     )
   );
 
