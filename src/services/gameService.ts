@@ -171,24 +171,24 @@ class GameService {
         const { data, error } = await supabase
           .from('game_sessions')
           .select('*')
-          .eq('patient_id', userId)
-          .order('completed_at', { ascending: false });
+          .or(`patient_id.eq.${userId},user_id.eq.${userId}`)
+          .order('created_at', { ascending: false });
 
         if (data && !error && data.length > 0) {
           const mapped: GameSession[] = data.map((d) => ({
             id: d.id,
             gameId: d.game_id as GameId,
-            userId: d.patient_id,
-            timestamp: d.completed_at,
+            userId: d.patient_id || d.user_id || userId,
+            timestamp: d.completed_at || d.created_at || new Date().toISOString(),
             durationSeconds: d.duration_seconds || 0,
             score: d.score,
             accuracy: Number(d.accuracy) || 100,
-            difficulty: (d.metadata?.difficulty || 'saral') as DifficultyTier,
+            difficulty: (d.difficulty || d.metadata?.difficulty || 'saral') as DifficultyTier,
             completed: true,
-            xpEarned: d.metadata?.xpEarned || 50,
-            mistakesCount: d.metadata?.mistakesCount || 0,
-            hintsUsed: d.metadata?.hintsUsed || 0,
-            domainScores: d.metadata?.domainScores,
+            xpEarned: d.xp_earned ?? d.metadata?.xpEarned ?? 50,
+            mistakesCount: d.mistakes_count ?? d.metadata?.mistakesCount ?? 0,
+            hintsUsed: d.hints_used ?? d.metadata?.hintsUsed ?? 0,
+            domainScores: d.domain_scores || d.metadata?.domainScores,
           }));
 
           this.sessions = [

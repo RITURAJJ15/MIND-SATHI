@@ -1,47 +1,10 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { createClient } from '@supabase/supabase-js';
 
-// In-memory cache for serverless invocation lifetime
-let memoryStore: {
-  patients: any[];
-  caregivers: any[];
-  links: any[];
-} = {
-  patients: [
-    {
-      id: '11111111-1111-4000-a000-000000000001',
-      full_name: 'Ramesh Kumar',
-      name: 'Ramesh Kumar',
-      preferred_name: 'Ramesh Ji',
-      preferredName: 'Ramesh Ji',
-      role: 'elderly',
-      email: 'ramesh@mindsathi.in',
-      phone: '9876543210',
-      age: 72,
-      gender: 'male',
-      city: 'Guwahati',
-      state: 'Assam',
-      connectionCode: 'MS-RAMESH',
-      secondaryLanguage: 'MS-RAMESH',
-      secondary_language: 'MS-RAMESH',
-      profile_photo_url: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=300&q=80',
-      avatarUrl: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=300&q=80',
-      abha_id: '91-4829-1029-4820',
-      abhaId: '91-4829-1029-4820',
-      pmjay_id: 'PMJAY-AS-84729104',
-      pmjayId: 'PMJAY-AS-84729104',
-      streak_days: 5,
-      streakDays: 5,
-      total_xp: 450,
-      totalXp: 450,
-      level: 2,
-      level_title: 'Sadhak Sathi',
-      levelTitle: 'Sadhak Sathi',
-      createdAt: new Date().toISOString(),
-    },
-  ],
-  caregivers: [],
-  links: [],
-};
+const SUPABASE_URL = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || '';
+
+const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'OPTIONS') {
@@ -55,125 +18,312 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
+  // 1. Enforce verified authentication header for all sync operations
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({
+      success: false,
+      error: 'Authentication required. Authorization bearer token missing.',
+    });
+  }
+
+  if (!supabase) {
+    return res.status(503).json({
+      success: false,
+      error: 'Persistent storage is not configured on the server.',
+    });
+  }
+
   const url = req.url || '';
   const [urlPath] = url.split('?');
   const query = req.query || {};
 
-  // 1. Find patient
-  if (urlPath.includes('/find-patient') && req.method === 'GET') {
-    const q = ((query.q || query.query || query.code || query.email || '') as string).trim().toLowerCase();
-    const cleanDigits = q.replace(/\D/g, '');
-    const codeNoPrefix = q.replace(/^ms-?/i, '');
+  const token = authHeader.substring(7).trim();
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser(token);
 
-    const found = memoryStore.patients.find((p) => {
-      const pEmail = (p.email || '').toLowerCase();
-      const pCode = (p.connectionCode || p.secondary_language || p.secondaryLanguage || '').toLowerCase();
-      const pCodeNoPrefix = pCode.replace(/^ms-?/i, '');
-      const pId = (p.id || '').toLowerCase();
-      const pName = (p.full_name || p.name || '').toLowerCase();
-      const pPhone = (p.phone || '').replace(/\D/g, '');
-
-      if (pEmail && pEmail === q) return true;
-      if (pCode && (pCode === q || pCodeNoPrefix === codeNoPrefix)) return true;
-      if (pId && (pId === q || pId.startsWith(q) || (codeNoPrefix.length >= 4 && pId.replace(/-/g, '').startsWith(codeNoPrefix)))) return true;
-      if (cleanDigits.length >= 10 && pPhone.endsWith(cleanDigits.slice(-10))) return true;
-      if (q.length > 2 && pName.includes(q)) return true;
-      return false;
+  if (authError || !user) {
+    return res.status(401).json({
+      success: false,
+      error: 'Invalid or expired session. Please sign in again.',
     });
+  }
 
-    if (found) {
-      return res.status(200).json({ success: true, patient: found });
+  // Helper: check if caller has admin role
+  const { data: callerProfile } = await supabase
+    .from('profiles')
+    .select('role')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  const isCallerAdmin = callerProfile?.role === 'admin' || user.app_metadata?.role === 'admin';
+
+  try {
+    // ── 1. Find patient (Authenticated Caregiver Connection Lookup) ───────────
+    if (urlPath.includes('/find-patient') && req.method === 'GET') {
+      const q = ((query.q || query.query || query.code || query.email || '') as string).trim().toLowerCase();
+      if (!q) {
+        return res.status(400).json({ success: false, error: 'Query parameter required' });
+      }
+
+      // A. Try find_patient_for_connection RPC with caller's authenticated context
+      try {
+        const userClient = createClient(SUPABASE_URL, SUPABASE_KEY, {
+          global: { headers: { Authorization: `Bearer ${token}` } },
+        });
+        const { data: rpcData, error: rpcErr } = await userClient.rpc('find_patient_for_connection', {
+          identifier: q,
+        });
+
+        if (!rpcErr && rpcData) {
+          const rows = Array.isArray(rpcData) ? rpcData : [rpcData];
+          if (rows.length > 0 && rows[0]?.id) {
+            return res.status(200).json({ success: true, patient: rows[0] });
+          }
+        }
+      } catch {
+        // Fall through to query lookup below
+      }
+
+      // B. Query public.profiles using safe minimal projection
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(q);
+
+      let queryBuilder = supabase
+        .from('profiles')
+        .select('id, full_name, preferred_name, role, email, phone, age, gender, city, state, northeast_region, profile_photo_url, connection_code, streak_days, total_xp, level, level_title, has_completed_onboarding, created_at')
+        .in('role', ['elderly', 'patient']);
+
+      if (isUuid) {
+        queryBuilder = queryBuilder.eq('id', q);
+      } else if (q.includes('@')) {
+        queryBuilder = queryBuilder.ilike('email', q);
+      } else {
+        queryBuilder = queryBuilder.or(`connection_code.ilike.${q},phone.ilike.%${q}%`);
+      }
+
+      const { data: ptData, error: ptErr } = await queryBuilder.limit(1).maybeSingle();
+
+      if (!ptErr && ptData) {
+        const pt = ptData as Record<string, any>;
+        return res.status(200).json({
+          success: true,
+          patient: {
+            ...pt,
+            name: pt.full_name,
+            preferredName: pt.preferred_name,
+            avatarUrl: pt.profile_photo_url,
+            connectionCode: pt.connection_code,
+            streakDays: pt.streak_days,
+            totalXp: pt.total_xp,
+            levelTitle: pt.level_title,
+          },
+        });
+      }
+
+      return res.status(404).json({ success: false, error: 'No patient found matching search criteria' });
     }
-    return res.status(404).json({ success: false, error: 'No patient found' });
-  }
 
-  // 2. Store patient
-  if (urlPath.includes('/store-patient') && req.method === 'POST') {
-    const body = req.body || {};
-    const patient = body.patient || body;
-    if (!patient?.id) return res.status(400).json({ success: false, error: 'Missing patient ID' });
+    // ── 2. Store / update patient profile (Strict Patient Ownership Check) ───
+    if (urlPath.includes('/store-patient') && req.method === 'POST') {
+      const body = req.body || {};
+      const patient = body.patient || body;
+      if (!patient?.id) {
+        return res.status(400).json({ success: false, error: 'Missing patient ID' });
+      }
 
-    const connectionCode = patient.connectionCode || patient.secondary_language || patient.secondaryLanguage || ('MS-' + patient.id.replace(/-/g, '').substring(0, 6).toUpperCase());
-    const normalized = {
-      ...patient,
-      connectionCode,
-      secondaryLanguage: connectionCode,
-      secondary_language: connectionCode,
-      updatedAt: new Date().toISOString(),
-    };
+      // Ownership enforcement: Caller can only update their own profile unless admin
+      if (user.id !== patient.id && !isCallerAdmin) {
+        return res.status(403).json({
+          success: false,
+          error: 'Forbidden: You can only update your own patient profile.',
+        });
+      }
 
-    const idx = memoryStore.patients.findIndex((p) => p.id === patient.id || (p.email && patient.email && p.email.toLowerCase() === patient.email.toLowerCase()));
-    if (idx >= 0) memoryStore.patients[idx] = { ...memoryStore.patients[idx], ...normalized };
-    else memoryStore.patients.push(normalized);
+      const payload: Record<string, any> = {
+        id: patient.id,
+        updated_at: new Date().toISOString(),
+      };
 
-    return res.status(200).json({ success: true, patient: normalized });
-  }
+      if (patient.name || patient.full_name) payload.full_name = patient.name || patient.full_name;
+      if (patient.preferredName || patient.preferred_name) payload.preferred_name = patient.preferredName || patient.preferred_name;
+      if (patient.phone) payload.phone = patient.phone;
+      if (patient.age) payload.age = patient.age;
+      if (patient.gender) payload.gender = patient.gender;
+      if (patient.city) payload.city = patient.city;
+      if (patient.state) payload.state = patient.state;
+      if (patient.connectionCode || patient.connection_code) payload.connection_code = patient.connectionCode || patient.connection_code;
+      if (patient.profile_photo_url || patient.avatarUrl) payload.profile_photo_url = patient.profile_photo_url || patient.avatarUrl;
 
-  // 3. Store caregiver
-  if (urlPath.includes('/store-caregiver') && req.method === 'POST') {
-    const body = req.body || {};
-    const caregiver = body.caregiver || body;
-    if (!caregiver?.email) return res.status(400).json({ success: false, error: 'Missing caregiver email' });
+      const { error: upsertErr } = await supabase.from('profiles').upsert(payload, { onConflict: 'id' });
 
-    const cleanEmail = caregiver.email.toLowerCase();
-    const normalized = { ...caregiver, email: cleanEmail, updatedAt: new Date().toISOString() };
-    const idx = memoryStore.caregivers.findIndex((c) => c.email.toLowerCase() === cleanEmail || (caregiver.id && c.id === caregiver.id));
-    if (idx >= 0) memoryStore.caregivers[idx] = { ...memoryStore.caregivers[idx], ...normalized };
-    else memoryStore.caregivers.push(normalized);
+      if (upsertErr) {
+        return res.status(500).json({ success: false, error: 'Failed to persist patient record in database' });
+      }
 
-    return res.status(200).json({ success: true, caregiver: normalized });
-  }
-
-  // 4. Get caregiver
-  if (urlPath.includes('/get-caregiver') && req.method === 'GET') {
-    const email = ((query.email || '') as string).trim().toLowerCase();
-    const found = memoryStore.caregivers.find((c) => c.email.toLowerCase() === email);
-    if (found) return res.status(200).json({ success: true, caregiver: found });
-    return res.status(404).json({ success: false, error: 'Caregiver not found' });
-  }
-
-  // 5. Link patient
-  if (urlPath.includes('/link-patient') && req.method === 'POST') {
-    const { caregiverId, patientId, caregiverEmail, patientEmail, connectionCode } = req.body || {};
-    if (!caregiverId || !patientId) return res.status(400).json({ success: false, error: 'Missing IDs' });
-
-    const otherCg = memoryStore.links.find((l) => l.patientId === patientId && l.caregiverId !== caregiverId);
-    if (otherCg) {
-      return res.status(409).json({ success: false, error: 'Patient is already linked to another caregiver.' });
+      return res.status(200).json({ success: true, patient: payload });
     }
 
-    memoryStore.links = memoryStore.links.filter((l) => l.caregiverId !== caregiverId && l.caregiverEmail !== caregiverEmail);
-    memoryStore.links.push({
-      caregiverId,
-      patientId,
-      caregiverEmail: caregiverEmail?.toLowerCase(),
-      patientEmail: patientEmail?.toLowerCase(),
-      connectionCode,
-      linkedAt: new Date().toISOString(),
-    });
+    // ── 3. Link caregiver and patient (Strict Caregiver Ownership Check) ─────
+    if (urlPath.includes('/link-patient') && req.method === 'POST') {
+      const { caregiverId, patientId, relationship = 'Caregiver' } = req.body || {};
+      if (!caregiverId || !patientId) {
+        return res.status(400).json({ success: false, error: 'caregiverId and patientId are required' });
+      }
 
-    return res.status(200).json({ success: true });
+      // Ownership enforcement: Caller must be the caregiver being linked (or admin)
+      if (user.id !== caregiverId && !isCallerAdmin) {
+        return res.status(403).json({
+          success: false,
+          error: 'Forbidden: You can only link patients to your own caregiver account.',
+        });
+      }
+
+      // Check if patient is already linked to another caregiver
+      const { data: existingLink } = await supabase
+        .from('caregiver_patient')
+        .select('caregiver_id')
+        .eq('patient_id', patientId)
+        .neq('caregiver_id', caregiverId)
+        .eq('status', 'approved')
+        .limit(1)
+        .maybeSingle();
+
+      if (existingLink) {
+        return res.status(409).json({
+          success: false,
+          error: 'Patient is already linked to another caregiver.',
+        });
+      }
+
+      // Upsert relationship into public.caregiver_patient
+      const { error: linkErr } = await supabase.from('caregiver_patient').upsert(
+        {
+          caregiver_id: caregiverId,
+          patient_id: patientId,
+          relationship,
+          status: 'approved',
+          approved_at: new Date().toISOString(),
+        },
+        { onConflict: 'caregiver_id,patient_id' }
+      );
+
+      if (linkErr) {
+        console.error('[SyncApi] Link error:', linkErr);
+        return res.status(500).json({ success: false, error: 'Failed to establish patient link in database' });
+      }
+
+      return res.status(200).json({ success: true, message: 'Caregiver and patient linked successfully' });
+    }
+
+    // ── 4. Unlink patient (Strict Caregiver or Patient Ownership Check) ──────
+    if (urlPath.includes('/unlink-patient') && req.method === 'POST') {
+      const { caregiverId, patientId } = req.body || {};
+      if (!caregiverId) {
+        return res.status(400).json({ success: false, error: 'caregiverId is required' });
+      }
+
+      // Ownership enforcement: Caller must be either the caregiver or the patient (or admin)
+      if (user.id !== caregiverId && user.id !== patientId && !isCallerAdmin) {
+        return res.status(403).json({
+          success: false,
+          error: 'Forbidden: You can only unlink connections associated with your account.',
+        });
+      }
+
+      let deleteQuery = supabase.from('caregiver_patient').delete().eq('caregiver_id', caregiverId);
+      if (patientId) {
+        deleteQuery = deleteQuery.eq('patient_id', patientId);
+      }
+
+      const { error: unlinkErr } = await deleteQuery;
+      if (unlinkErr) {
+        return res.status(500).json({ success: false, error: 'Failed to remove patient link from database' });
+      }
+
+      return res.status(200).json({ success: true, message: 'Link removed successfully' });
+    }
+
+    // ── 5. Get assigned patient for caregiver (Strict Caregiver Ownership) ───
+    if (urlPath.includes('/get-assigned-patient') && req.method === 'GET') {
+      const cgId = (query.caregiverId || '') as string;
+      if (!cgId) {
+        return res.status(400).json({ success: false, error: 'caregiverId query parameter is required' });
+      }
+
+      // Ownership enforcement: Caller can only view patients assigned to themselves (or admin)
+      if (user.id !== cgId && !isCallerAdmin) {
+        return res.status(403).json({
+          success: false,
+          error: 'Forbidden: You can only view patients assigned to your own caregiver account.',
+        });
+      }
+
+      // Query caregiver_patient join
+      const { data: linkRows, error: linkErr } = await supabase
+        .from('caregiver_patient')
+        .select('patient_id, relationship, status, approved_at')
+        .eq('caregiver_id', cgId)
+        .eq('status', 'approved')
+        .limit(1);
+
+      if (linkErr || !linkRows || linkRows.length === 0) {
+        return res.status(404).json({ success: false, error: 'No assigned patient found for caregiver' });
+      }
+
+      const patientId = linkRows[0].patient_id;
+      const { data: patientProfile, error: ptErr } = await supabase
+        .from('profiles')
+        .select('id, full_name, preferred_name, role, email, phone, age, gender, city, state, northeast_region, profile_photo_url, connection_code, streak_days, total_xp, level, level_title, has_completed_onboarding, created_at')
+        .eq('id', patientId)
+        .maybeSingle();
+
+      if (ptErr || !patientProfile) {
+        return res.status(404).json({ success: false, error: 'Assigned patient profile not found' });
+      }
+
+      const pt = patientProfile as Record<string, any>;
+      return res.status(200).json({
+        success: true,
+        patient: {
+          ...pt,
+          name: pt.full_name,
+          preferredName: pt.preferred_name,
+          avatarUrl: pt.profile_photo_url,
+          connectionCode: pt.connection_code,
+          streakDays: pt.streak_days,
+          totalXp: pt.total_xp,
+          levelTitle: pt.level_title,
+        },
+        link: linkRows[0],
+      });
+    }
+
+    // ── 6. Get caregiver by email (Authenticated Caregiver Lookup) ───────────
+    if (urlPath.includes('/get-caregiver') && req.method === 'GET') {
+      const email = ((query.email || '') as string).trim().toLowerCase();
+      if (!email) {
+        return res.status(400).json({ success: false, error: 'email query parameter required' });
+      }
+
+      const { data: cgData, error: cgErr } = await supabase
+        .from('profiles')
+        .select('id, full_name, preferred_name, role, email, phone, profile_photo_url, created_at')
+        .eq('role', 'caregiver')
+        .ilike('email', email)
+        .maybeSingle();
+
+      if (!cgErr && cgData) {
+        return res.status(200).json({ success: true, caregiver: cgData });
+      }
+
+      return res.status(404).json({ success: false, error: 'Caregiver profile not found' });
+    }
+
+    return res.status(404).json({ success: false, error: 'Endpoint not found' });
+  } catch (error: any) {
+    console.error('[SyncApi] Internal error:', error);
+    return res.status(500).json({ success: false, error: 'Internal server error processing sync request' });
   }
-
-  // 6. Get assigned patient
-  if (urlPath.includes('/get-assigned-patient') && req.method === 'GET') {
-    const cgId = (query.caregiverId || '') as string;
-    const cgEmail = ((query.caregiverEmail || '') as string).toLowerCase();
-
-    const link = memoryStore.links.find((l) => (cgId && l.caregiverId === cgId) || (cgEmail && l.caregiverEmail === cgEmail));
-    if (!link) return res.status(404).json({ success: false, error: 'No patient assigned' });
-
-    const patient = memoryStore.patients.find(
-      (p) =>
-        p.id === link.patientId ||
-        (link.patientEmail && p.email && p.email.toLowerCase() === link.patientEmail.toLowerCase()) ||
-        (link.connectionCode && (p.connectionCode === link.connectionCode || p.secondary_language === link.connectionCode)) ||
-        ((link.patientId === 'd8a2f3e4-5b6c-7d8e-9f0a-1b2c3d4e5f6a' || link.patientId === '11111111-1111-4000-a000-000000000001') &&
-         p.email === 'ramesh@mindsathi.in')
-    );
-    if (patient) return res.status(200).json({ success: true, patient, link });
-    return res.status(404).json({ success: false, error: 'Patient not found' });
-  }
-
-  return res.status(404).json({ success: false, error: 'Not found' });
 }

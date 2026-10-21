@@ -109,7 +109,8 @@ CREATE INDEX IF NOT EXISTS idx_family_patient ON public.family_members(patient_i
 -- ------------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.game_sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
+  patient_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
   game_id TEXT NOT NULL,
   score INT DEFAULT 0,
   accuracy INT DEFAULT 0,
@@ -121,10 +122,14 @@ CREATE TABLE IF NOT EXISTS public.game_sessions (
   mistakes_count INT DEFAULT 0,
   hints_used INT DEFAULT 0,
   domain_scores JSONB,
+  metadata JSONB DEFAULT '{}'::jsonb,
+  completed_at TIMESTAMPTZ DEFAULT now(),
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_game_sessions_user ON public.game_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_game_sessions_patient ON public.game_sessions(patient_id);
+CREATE INDEX IF NOT EXISTS idx_game_sessions_completed ON public.game_sessions(completed_at DESC);
 CREATE INDEX IF NOT EXISTS idx_game_sessions_created ON public.game_sessions(created_at DESC);
 
 -- ------------------------------------------------------------------------------
@@ -498,8 +503,8 @@ CREATE POLICY "Caregivers can view connected patient family members"
 CREATE POLICY "Patient can view and record own game sessions"
   ON public.game_sessions FOR ALL
   TO authenticated
-  USING (user_id = auth.uid())
-  WITH CHECK (user_id = auth.uid());
+  USING (user_id = auth.uid() OR patient_id = auth.uid())
+  WITH CHECK (user_id = auth.uid() OR patient_id = auth.uid());
 
 CREATE POLICY "Caregiver can view connected patient game sessions"
   ON public.game_sessions FOR SELECT
@@ -508,7 +513,7 @@ CREATE POLICY "Caregiver can view connected patient game sessions"
     EXISTS (
       SELECT 1 FROM public.caregiver_patient cp
       WHERE cp.caregiver_id = auth.uid()
-        AND cp.patient_id = public.game_sessions.user_id
+        AND (cp.patient_id = public.game_sessions.user_id OR cp.patient_id = public.game_sessions.patient_id)
         AND cp.status = 'approved'
     )
   );
@@ -520,7 +525,7 @@ CREATE POLICY "Doctor can view connected patient game sessions"
     EXISTS (
       SELECT 1 FROM public.doctor_patient dp
       WHERE dp.doctor_id = auth.uid()
-        AND dp.patient_id = public.game_sessions.user_id
+        AND (dp.patient_id = public.game_sessions.user_id OR dp.patient_id = public.game_sessions.patient_id)
         AND dp.status = 'approved'
     )
   );
@@ -631,6 +636,8 @@ CREATE POLICY "Patients can view their own live location sessions"
       WHERE cp.caregiver_id = public.live_location_sessions.caregiver_id
         AND cp.patient_id = auth.uid()
     )
+  );
+
 -- 5. Enable Realtime on live_location_sessions
 DO $$
 BEGIN

@@ -270,18 +270,28 @@ class SyncService {
               .maybeSingle();
 
             if (!existing) {
+              const sessionTimestamp = mut.payload.timestamp || mut.createdAt || new Date().toISOString();
               const { error: insertError } = await supabase.from('game_sessions').insert({
+                user_id: mut.patientId,
                 patient_id: mut.patientId,
                 game_id: mut.payload.gameId,
-                score: mut.payload.score,
-                accuracy: mut.payload.accuracy,
+                score: mut.payload.score || 0,
+                accuracy: mut.payload.accuracy || 0,
+                reaction_time_ms: mut.payload.reactionTimeMs || 0,
                 duration_seconds: mut.payload.durationSeconds || 0,
+                difficulty: mut.payload.difficulty || mut.payload.metadata?.difficulty || 'saral',
+                completed: true,
+                xp_earned: mut.payload.xpEarned || mut.payload.metadata?.xpEarned || 50,
+                mistakes_count: mut.payload.mistakesCount || mut.payload.metadata?.mistakesCount || 0,
+                hints_used: mut.payload.hintsUsed || mut.payload.metadata?.hintsUsed || 0,
+                domain_scores: mut.payload.domainScores || mut.payload.metadata?.domainScores || null,
                 metadata: {
                   ...(mut.payload.metadata || {}),
                   localSessionId,
                   idempotencyKey: mut.idempotencyKey,
                 },
-                created_at: mut.payload.timestamp || mut.createdAt,
+                completed_at: sessionTimestamp,
+                created_at: sessionTimestamp,
               });
 
               if (insertError) throw insertError;
@@ -450,12 +460,21 @@ class SyncService {
               .maybeSingle();
 
             if (!existing) {
+              const sessionTimestamp = session.timestamp || new Date().toISOString();
               const { error: insertError } = await supabase.from('game_sessions').insert({
+                user_id: session.userId,
                 patient_id: session.userId,
                 game_id: session.gameId,
-                score: session.score,
-                accuracy: session.accuracy,
-                duration_seconds: session.durationSeconds,
+                score: session.score || 0,
+                accuracy: session.accuracy || 0,
+                reaction_time_ms: session.reactionTimeMs || 0,
+                duration_seconds: session.durationSeconds || 0,
+                difficulty: session.difficulty || 'saral',
+                completed: true,
+                xp_earned: session.xpEarned || 50,
+                mistakes_count: session.mistakesCount || 0,
+                hints_used: session.hintsUsed || 0,
+                domain_scores: session.domainScores || null,
                 metadata: {
                   mistakesCount: session.mistakesCount,
                   hintsUsed: session.hintsUsed,
@@ -465,7 +484,8 @@ class SyncService {
                   reactionTimeMs: session.reactionTimeMs,
                   localSessionId: session.id,
                 },
-                created_at: session.timestamp,
+                completed_at: sessionTimestamp,
+                created_at: sessionTimestamp,
               });
 
               if (insertError) throw insertError;

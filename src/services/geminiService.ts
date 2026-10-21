@@ -64,8 +64,8 @@ class GeminiService {
         const { data, error } = await supabase
           .from('game_sessions')
           .select('*')
-          .eq('patient_id', userId)
-          .order('completed_at', { ascending: false })
+          .or(`patient_id.eq.${userId},user_id.eq.${userId}`)
+          .order('created_at', { ascending: false })
           .limit(20);
 
         if (!error && data) {
@@ -74,10 +74,10 @@ class GeminiService {
             score: d.score,
             accuracy: d.accuracy,
             durationSeconds: d.duration_seconds,
-            timestamp: d.completed_at,
-            mistakesCount: d.metadata?.mistakesCount ?? 0,
-            hintsUsed: d.metadata?.hintsUsed ?? 0,
-            difficulty: d.metadata?.difficulty ?? 'saral',
+            timestamp: d.completed_at || d.created_at || new Date().toISOString(),
+            mistakesCount: d.mistakes_count ?? d.metadata?.mistakesCount ?? 0,
+            hintsUsed: d.hints_used ?? d.metadata?.hintsUsed ?? 0,
+            difficulty: d.difficulty || d.metadata?.difficulty || 'saral',
           }));
         }
       } catch (err) {
@@ -511,8 +511,8 @@ class GeminiService {
         const { data: gData } = await supabase
           .from('game_sessions')
           .select('*')
-          .eq('patient_id', patientId)
-          .order('completed_at', { ascending: false })
+          .or(`patient_id.eq.${patientId},user_id.eq.${patientId}`)
+          .order('created_at', { ascending: false })
           .limit(30);
 
         if (gData) {
@@ -522,10 +522,10 @@ class GeminiService {
             score: d.score,
             accuracy: d.accuracy,
             durationSeconds: d.duration_seconds,
-            completedAt: d.completed_at,
-            mistakes: d.metadata?.mistakesCount ?? 0,
-            hintsUsed: d.metadata?.hintsUsed ?? 0,
-            difficulty: d.metadata?.difficulty ?? 'saral',
+            completedAt: d.completed_at || d.created_at || new Date().toISOString(),
+            mistakes: d.mistakes_count ?? d.metadata?.mistakesCount ?? 0,
+            hintsUsed: d.hints_used ?? d.metadata?.hintsUsed ?? 0,
+            difficulty: d.difficulty || d.metadata?.difficulty || 'saral',
           }));
         }
       } catch (err) {

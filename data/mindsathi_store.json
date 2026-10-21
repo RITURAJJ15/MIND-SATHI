@@ -53,6 +53,53 @@
       "createdAt": "2026-09-11T19:51:34.208Z",
       "secondaryLanguage": "MS-SUNITA",
       "updatedAt": "2026-09-11T19:51:34.225Z"
+    },
+    {
+      "id": "20831084-c081-4a55-9697-ed48175c3933",
+      "name": "Technical Ritu",
+      "preferredName": "Technical",
+      "role": "elderly",
+      "age": 72,
+      "gender": "male",
+      "avatarUrl": "https://lh3.googleusercontent.com/a/ACg8ocJbbOx0H_wgSRwTruEPUm3BStvI_5bUOdR8tQlA5h-iP7vs-qkg=s96-c",
+      "primaryLanguage": "en",
+      "secondaryLanguage": "MS-97FHZZ",
+      "city": "Guwahati",
+      "state": "Assam",
+      "northeastRegion": "Assam",
+      "isAyushmanMember": false,
+      "ayushmanMemberId": null,
+      "pmjayId": null,
+      "ayushmanStatus": "none",
+      "pmjayStatus": "none",
+      "abhaId": null,
+      "abhaStatus": "none",
+      "hasCompletedOnboarding": false,
+      "familyMemberCount": 3,
+      "caregiverIds": [],
+      "clinicianIds": [],
+      "accessibility": {
+        "fontSize": "normal",
+        "speechRate": 0.85,
+        "highContrast": false,
+        "soundEffects": true,
+        "earned_badges": [
+          "b-first-game",
+          "b-smriti-master",
+          "b-family-connect"
+        ],
+        "textToSpeechAuto": true
+      },
+      "streakDays": 1,
+      "totalXp": 358,
+      "level": 1,
+      "levelTitle": "Aarambh Sathi (Beginner)",
+      "createdAt": "2026-09-11T11:38:04.945443+00:00",
+      "email": "riturajdeka172@gmail.com",
+      "phone": "",
+      "connectionCode": "MS-97FHZZ",
+      "secondary_language": "MS-97FHZZ",
+      "updatedAt": "2026-10-17T15:15:01.589Z"
     }
   ],
   "caregivers": [

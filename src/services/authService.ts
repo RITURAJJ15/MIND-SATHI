@@ -236,7 +236,12 @@ class AuthService {
       }
 
       const isCallbackRoute = typeof window !== 'undefined' &&
-        (window.location.pathname.includes('auth/callback') || window.location.hash.includes('auth/callback'));
+        (window.location.pathname.includes('auth/callback') ||
+         window.location.hash.includes('auth/callback') ||
+         window.location.search.includes('code=') ||
+         window.location.search.includes('intended_role=') ||
+         window.location.hash.includes('code=') ||
+         window.location.hash.includes('access_token='));
 
       if (!isCallbackRoute && sbSession?.user) {
         // Query Supabase profile directly using user ID
@@ -270,7 +275,12 @@ class AuthService {
         if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
           if (newSession?.user) {
             const isCallback = typeof window !== 'undefined' &&
-              (window.location.pathname.includes('auth/callback') || window.location.hash.includes('auth/callback'));
+              (window.location.pathname.includes('auth/callback') ||
+               window.location.hash.includes('auth/callback') ||
+               window.location.search.includes('code=') ||
+               window.location.search.includes('intended_role=') ||
+               window.location.hash.includes('code=') ||
+               window.location.hash.includes('access_token='));
             if (isCallback) {
               // Dedicated handleOAuthCallback flow handles the callback route exclusively
               return;
@@ -329,7 +339,7 @@ class AuthService {
 
       // ── Native Capacitor Mobile OAuth Flow ──
       if (Capacitor.isNativePlatform()) {
-        const redirectTarget = 'com.mindsathi.app://auth/callback';
+        const redirectTarget = `com.mindsathi.app://auth/callback?intended_role=${encodeURIComponent(role)}`;
         const { data, error } = await supabase.auth.signInWithOAuth({
           provider: 'google',
           options: {
@@ -358,7 +368,8 @@ class AuthService {
       }
 
       // ── Standard Web Browser OAuth Flow (https://www.riturajfx.site/) ──
-      const redirectTarget = `${window.location.origin}/#/auth/callback`;
+      // Pass intended_role in redirect target URL so role intent survives cross-origin OAuth redirects
+      const redirectTarget = `${window.location.origin}/?intended_role=${encodeURIComponent(role)}#/auth/callback`;
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'google',
         options: {
@@ -416,8 +427,40 @@ class AuthService {
       return { success: false, error: 'A registration request is already in progress. Please wait.' };
     }
 
+    // 2b. Check if user is already authenticated as caregiver
+    if (this.session && this.currentProfile && this.currentProfile.role === 'caregiver') {
+      return {
+        success: true,
+        profile: this.currentProfile,
+        message: 'You are already signed in as a Caregiver.',
+      };
+    }
+
     try {
       this.isCaregiverSignUpInFlight = true;
+
+      // 2c. Pre-check database profiles to avoid calling signUp() on already-registered accounts
+      const { data: existingProfile } = await supabase
+        .from('profiles')
+        .select('id, role')
+        .ilike('email', cleanEmail)
+        .maybeSingle();
+
+      if (existingProfile) {
+        if (existingProfile.role === 'elderly' || (existingProfile.role as string) === 'patient') {
+          return {
+            success: false,
+            error: 'This email is already registered as an Elderly Patient. Caregivers must use a different email address.',
+          };
+        }
+        if (existingProfile.role === 'caregiver') {
+          return {
+            success: false,
+            isAlreadyRegistered: true,
+            error: 'An account with this email is already registered. Please switch to the "Sign In" tab to log in with your password.',
+          };
+        }
+      }
 
       // 3. Exactly ONE call to supabase.auth.signUp() only
       const { data: authData, error: signUpErr } = await supabase.auth.signUp({
@@ -434,6 +477,31 @@ class AuthService {
       });
 
       if (signUpErr) {
+        const errMsg = (signUpErr.message || '').toLowerCase();
+        const isRateLimit =
+          signUpErr.status === 429 ||
+          errMsg.includes('rate limit') ||
+          errMsg.includes('rate_limit') ||
+          errMsg.includes('over_email_send_rate_limit');
+
+        if (isRateLimit) {
+          return {
+            success: false,
+            isRateLimited: true,
+            error:
+              'Email rate limit exceeded (maximum 3-4 emails/hour on free Supabase tier). If you already registered, please switch to the "Sign In" tab or click "Continue with Google as Caregiver" for instant access.',
+          };
+        }
+
+        if (errMsg.includes('already registered')) {
+          return {
+            success: false,
+            isAlreadyRegistered: true,
+            error:
+              'An account with this email is already registered. Please switch to the "Sign In" tab to log in with your password.',
+          };
+        }
+
         return { success: false, error: signUpErr.message };
       }
 
@@ -1304,80 +1372,66 @@ class AuthService {
         console.warn('[AuthService] Error fetching existing profile by auth user ID:', profileErr.message);
       }
 
-      const storedIntended = (
-        sessionStorage.getItem('ms_oauth_auth_intent') ||
-        localStorage.getItem('ms_oauth_auth_intent') ||
-        sessionStorage.getItem('ms_intended_role') ||
-        localStorage.getItem('ms_pending_oauth_role') ||
-        sessionStorage.getItem('ms_pending_oauth_role') ||
-        authUser.user_metadata?.role
-      ) as UserRole | null;
+      // Extract intended role: prioritize query param (survives OAuth redirects), then storage
+      const queryRole = combinedParams.get('intended_role') || combinedParams.get('role');
+      let validatedIntentRole: UserRole | null = null;
+      if (queryRole === 'caregiver' || queryRole === 'elderly' || queryRole === 'clinician') {
+        validatedIntentRole = queryRole;
+      }
 
-      const isCaregiverIntent = storedIntended === 'caregiver';
+      if (!validatedIntentRole) {
+        const stored = (
+          sessionStorage.getItem('ms_oauth_auth_intent') ||
+          localStorage.getItem('ms_oauth_auth_intent') ||
+          sessionStorage.getItem('ms_intended_role') ||
+          localStorage.getItem('ms_pending_oauth_role') ||
+          sessionStorage.getItem('ms_pending_oauth_role')
+        ) as UserRole | null;
+        if (stored === 'caregiver' || stored === 'elderly' || stored === 'clinician') {
+          validatedIntentRole = stored;
+        }
+      }
+
+      const isCaregiverIntent = validatedIntentRole === 'caregiver';
 
       let profile: UserProfile | null = null;
       let finalRole: UserRole = isCaregiverIntent ? 'caregiver' : 'elderly';
 
       if (dbProfile) {
-        console.log('[AuthService] Existing profile found for auth user ID:', userId, 'Role in DB:', dbProfile.role, 'Auth intent:', storedIntended);
+        console.log('[AuthService] Existing profile found for auth user ID:', userId, 'Role in DB:', dbProfile.role, 'Auth intent:', validatedIntentRole);
         profile = mapDbProfileToUser(dbProfile as Record<string, unknown>, email);
         const rawRole = (dbProfile.role as string || '').toLowerCase();
 
-        if (isCaregiverIntent) {
-          if (rawRole === 'caregiver') {
-            finalRole = 'caregiver';
-          } else if (rawRole === 'elderly' || rawRole === 'patient') {
-            // If the user never completed patient onboarding, this was an auto-created draft or test account.
-            // Honor the explicit caregiver auth intent without creating a conflict.
-            if (!dbProfile.has_completed_onboarding) {
-              console.log('[AuthService] Google user has uncompleted elderly profile, but explicitly initiated Caregiver auth. Upgrading profile role to caregiver.');
-              try {
-                await supabase
-                  .from('profiles')
-                  .update({
-                    role: 'caregiver',
-                    has_completed_onboarding: true,
-                    updated_at: new Date().toISOString(),
-                  })
-                  .eq('id', userId);
-              } catch (updErr) {
-                console.warn('[AuthService] Could not update profile role in DB:', updErr);
-              }
-              profile.role = 'caregiver';
-              profile.hasCompletedOnboarding = true;
-              finalRole = 'caregiver';
-            } else {
-              // Existing completed patient account trying to sign in as caregiver. Do NOT blindly overwrite.
-              throw new Error(
-                'This Google account is already registered as an active Senior / Patient account. Please sign in via the Patient login or use a different Google account for your Caregiver portal.'
-              );
-            }
-          } else {
-            finalRole = 'caregiver';
+        if (rawRole === 'caregiver') {
+          // Existing authorized caregiver
+          finalRole = 'caregiver';
+        } else if (rawRole === 'elderly' || rawRole === 'patient') {
+          // Account is already registered as an Elderly Patient in database.
+          // Enforce requirement: A user cannot gain caregiver access merely by selecting the caregiver entry point.
+          if (isCaregiverIntent) {
+            throw new Error(
+              'This Google account is already registered as an Elderly Patient. Caregivers must use a separate Google account or sign in through the Patient Portal.'
+            );
           }
+          finalRole = 'elderly';
+        } else if (rawRole === 'clinician' || rawRole === 'doctor') {
+          finalRole = 'clinician';
         } else {
-          // Patient or clinician intent: respect database role
-          if (rawRole === 'caregiver') {
-            finalRole = 'caregiver';
-          } else if (rawRole === 'clinician' || rawRole === 'doctor') {
-            finalRole = 'clinician';
-          } else {
-            finalRole = 'elderly';
-          }
+          finalRole = isCaregiverIntent ? 'caregiver' : 'elderly';
         }
         profile.role = finalRole;
       } else {
-        // New Google user — complete profile using intended role (no signUp() call)
+        // New Google user — complete profile using validated intended role
         const intendedRole: UserRole = isCaregiverIntent
           ? 'caregiver'
-          : (storedIntended === 'clinician' ? 'clinician' : 'elderly');
+          : (validatedIntentRole === 'clinician' ? 'clinician' : 'elderly');
 
         console.log('[AuthService] No existing profile in Supabase. Completing new Google profile with role:', intendedRole);
-        profile = await this.completeGoogleProfile(intendedRole);
+        profile = await this.completeGoogleProfile(intendedRole, undefined, authUser);
         finalRole = profile?.role || intendedRole;
       }
 
-      // Clear pending OAuth role intent
+      // Clear pending OAuth role intent from storage
       localStorage.removeItem('ms_oauth_auth_intent');
       sessionStorage.removeItem('ms_oauth_auth_intent');
       localStorage.removeItem('ms_pending_oauth_role');
@@ -1405,10 +1459,11 @@ class AuthService {
       }
 
       // 7. Route based on role from Supabase:
-      // caregiver -> Caregiver Dashboard
+      // caregiver -> Caregiver Portal (/caregiver.html)
+      // clinician -> Doctor Dashboard
       // patient -> Patient Dashboard
       if (finalRole === 'caregiver') {
-        return '/caregiver/dashboard';
+        return '/caregiver.html';
       } else if (finalRole === 'clinician') {
         return '/doctor/dashboard';
       } else {
@@ -1423,9 +1478,9 @@ class AuthService {
   /**
    * Completes Google onboarding by creating the permanent profile with the selected role in Supabase.
    */
-  public async completeGoogleProfile(role: UserRole, details?: Partial<UserProfile>): Promise<UserProfile | null> {
+  public async completeGoogleProfile(role: UserRole, details?: Partial<UserProfile>, passedUser?: any): Promise<UserProfile | null> {
     try {
-      const authUser = (await supabase.auth.getUser()).data?.user || this.pendingGoogleUser;
+      const authUser = passedUser || (await supabase.auth.getUser()).data?.user || this.pendingGoogleUser;
       if (!authUser || !authUser.id) {
         console.error('[AuthService] completeGoogleProfile: No Supabase user authenticated.');
         return null;
@@ -1520,6 +1575,18 @@ class AuthService {
       this.needsRoleSelection = false;
       this.pendingGoogleUser = null;
       localStorage.setItem(SK_SESSION, JSON.stringify(this.session));
+      tabStorage.setItem(SK_SESSION, JSON.stringify(this.session));
+
+      if (role === 'caregiver') {
+        tabStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(newProfile));
+        localStorage.setItem(SK_CAREGIVER_PROFILE, JSON.stringify(newProfile));
+        tabStorage.setItem('ms_caregiver_auth_token', JSON.stringify(this.session));
+        localStorage.setItem('ms_caregiver_auth_token', JSON.stringify(this.session));
+      } else if (role === 'elderly') {
+        tabStorage.setItem(SK_PATIENT_PROFILE, JSON.stringify(newProfile));
+        localStorage.setItem(SK_PATIENT_PROFILE, JSON.stringify(newProfile));
+      }
+
       this.notifyListeners();
       return newProfile;
     } catch (err) {

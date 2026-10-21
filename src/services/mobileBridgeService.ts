@@ -66,23 +66,15 @@ export class MobileBridgeService {
             const code = urlObj.searchParams.get('code');
 
             if (accessToken && refreshToken) {
-              const { error } = await supabase.auth.setSession({
+              await supabase.auth.setSession({
                 access_token: accessToken,
                 refresh_token: refreshToken,
               });
-              if (!error) {
-                navigate('/patient/dashboard', true);
-                return;
-              }
             } else if (code) {
-              const { error } = await supabase.auth.exchangeCodeForSession(code);
-              if (!error) {
-                navigate('/patient/dashboard', true);
-                return;
-              }
+              await supabase.auth.exchangeCodeForSession(code);
             }
 
-            // Fallback: navigate to callback route so AuthCallbackPage processes it
+            // Navigate to callback route so OAuthCallbackPage & handleOAuthCallback resolve role and route properly
             navigate('/auth/callback', true);
           }
         } catch (linkErr) {

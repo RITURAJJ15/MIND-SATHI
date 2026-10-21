@@ -587,13 +587,20 @@ class FamilyService {
       console.warn('[FamilyService] Supabase delete note:', sbErr);
     }
 
-    // 5. Also call backend API to guarantee deletion in database regardless of client RLS session
+    // 5. Optionally invoke deletion API with authenticated user session
     try {
-      await fetch(resolveApiUrl('/api/family/delete'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ memberId: id, patientId, name }),
-      });
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+      if (accessToken) {
+        await fetch(resolveApiUrl('/api/family/delete'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({ memberId: id, patientId, name }),
+        });
+      }
     } catch (apiErr) {
       console.warn('[FamilyService] API delete endpoint note:', apiErr);
     }

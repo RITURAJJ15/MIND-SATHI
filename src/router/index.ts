@@ -24,6 +24,7 @@ export type AppRoute =
   | '/auth/callback'
   | '/patient/dashboard'
   | '/caregiver/dashboard'
+  | '/caregiver/navigator'
   | '/doctor/dashboard'
   | '/admin'
   | '/admin/portal';

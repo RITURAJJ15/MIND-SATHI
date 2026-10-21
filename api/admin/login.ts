@@ -1,11 +1,12 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import * as crypto from 'crypto';
+import { signAdminToken } from './_auth';
 
-// Allowed admin credentials - securely verified on serverless backend
-const DEFAULT_ID = Buffer.from('UklUVVJBSjEx', 'base64').toString('utf8').toLowerCase(); // rituraj11
-const DEFAULT_PASS = Buffer.from('UklUVVJBSkAxMQ==', 'base64').toString('utf8'); // RITURAJ@11
-
-const ALLOWED_ADMIN_ID = (process.env.ADMIN_USER_ID || DEFAULT_ID).trim().toLowerCase();
-const ALLOWED_ADMIN_PASS = (process.env.ADMIN_PASSWORD || DEFAULT_PASS).trim();
+function timingSafeMatch(a: string, b: string): boolean {
+  const hashA = crypto.createHash('sha256').update(a).digest();
+  const hashB = crypto.createHash('sha256').update(b).digest();
+  return crypto.timingSafeEqual(hashA, hashB);
+}
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Handle CORS preflight
@@ -24,6 +25,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ success: false, error: 'Method Not Allowed' });
   }
 
+  const allowedAdminId = (process.env.ADMIN_USER_ID || '').trim().toLowerCase();
+  const allowedAdminPass = (process.env.ADMIN_PASSWORD || '').trim();
+
+  // Fail closed if server credentials are not explicitly configured
+  if (!allowedAdminId || !allowedAdminPass) {
+    console.error('[AdminLogin] ADMIN_USER_ID or ADMIN_PASSWORD environment variable is not configured');
+    return res.status(503).json({
+      success: false,
+      error: 'Administrator authentication is unavailable. Server credentials have not been configured.',
+    });
+  }
+
   try {
     const { userId, password } = req.body || {};
 
@@ -37,11 +50,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    const isIdMatch = cleanId === ALLOWED_ADMIN_ID || cleanId === 'rituraj11' || cleanId === 'rituraj11@mindsathi.in';
-    const isPassMatch = cleanPass === ALLOWED_ADMIN_PASS;
+    const isIdMatch = timingSafeMatch(cleanId, allowedAdminId);
+    const isPassMatch = timingSafeMatch(cleanPass, allowedAdminPass);
 
     if (!isIdMatch || !isPassMatch) {
-      // Deliberate security delay
+      // Deliberate security delay to resist brute force
       await new Promise((resolve) => setTimeout(resolve, 600));
       return res.status(401).json({
         success: false,
@@ -49,14 +62,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    // Successfully verified administrator credentials
+    // Generate cryptographically signed HMAC admin token
+    const token = signAdminToken(cleanId);
+
     const adminProfile = {
       id: 'a1000000-0000-4000-a000-000000000003',
-      name: 'Rituraj (Platform Administrator)',
-      preferredName: 'Rituraj',
+      name: 'Platform Administrator',
+      preferredName: 'Admin',
       role: 'admin',
-      age: 32,
-      gender: 'male',
+      age: 35,
+      gender: 'other',
       avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&fit=crop&q=80',
       primaryLanguage: 'en',
       city: 'Guwahati',
@@ -70,22 +85,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       familyMemberCount: 0,
       caregiverIds: [],
       clinicianIds: [],
-      streakDays: 10,
+      streakDays: 1,
       totalXp: 1500,
       level: 10,
-      levelTitle: 'Super Administrator',
+      levelTitle: 'Platform Administrator',
       createdAt: '2025-01-01T00:00:00.000Z',
-      email: 'rituraj11@mindsathi.in',
-      phone: '+91 98000 00000',
+      email: cleanId.includes('@') ? cleanId : undefined,
     };
 
     return res.status(200).json({
       success: true,
-      token: `admin_token_${Date.now()}_secure`,
+      token,
       profile: adminProfile,
     });
   } catch (error: any) {
-    console.error('[AdminLogin] Internal error:', error);
+    console.error('[AdminLogin] Authentication error:', error);
     return res.status(500).json({
       success: false,
       error: 'An internal server error occurred while authenticating.',

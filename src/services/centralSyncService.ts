@@ -1,9 +1,27 @@
 import { UserProfile } from '../types/user';
 import { resolveApiUrl } from '../lib/apiConfig';
+import { supabase } from '../lib/supabase';
 
 class CentralSyncService {
   private getBaseUrl(): string {
     return resolveApiUrl('').replace(/\/+$/, '');
+  }
+
+  private async getAuthHeaders(includeJson = false): Promise<Record<string, string>> {
+    const headers: Record<string, string> = {};
+    if (includeJson) {
+      headers['Content-Type'] = 'application/json';
+    }
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData?.session?.access_token;
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+    } catch (e) {
+      console.warn('[CentralSyncService] Session token retrieval note:', e);
+    }
+    return headers;
   }
 
   public async findPatient(identifier: string): Promise<any | null> {
@@ -11,7 +29,10 @@ class CentralSyncService {
     const clean = identifier.trim();
 
     try {
-      const res = await fetch(`${this.getBaseUrl()}/api/sync/find-patient?q=${encodeURIComponent(clean)}`);
+      const headers = await this.getAuthHeaders();
+      const res = await fetch(`${this.getBaseUrl()}/api/sync/find-patient?q=${encodeURIComponent(clean)}`, {
+        headers,
+      });
       if (res.ok) {
         const data = await res.json();
         if (data?.success && data.patient) {
@@ -28,9 +49,10 @@ class CentralSyncService {
     if (!patient || !patient.id) return false;
 
     try {
+      const headers = await this.getAuthHeaders(true);
       const res = await fetch(`${this.getBaseUrl()}/api/sync/store-patient`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ patient }),
       });
       return res.ok;
@@ -50,9 +72,10 @@ class CentralSyncService {
     if (!caregiver || !caregiver.email) return false;
 
     try {
+      const headers = await this.getAuthHeaders(true);
       const res = await fetch(`${this.getBaseUrl()}/api/sync/store-caregiver`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ caregiver }),
       });
       return res.ok;
@@ -67,7 +90,10 @@ class CentralSyncService {
     const cleanEmail = email.trim().toLowerCase();
 
     try {
-      const res = await fetch(`${this.getBaseUrl()}/api/sync/get-caregiver?email=${encodeURIComponent(cleanEmail)}`);
+      const headers = await this.getAuthHeaders();
+      const res = await fetch(`${this.getBaseUrl()}/api/sync/get-caregiver?email=${encodeURIComponent(cleanEmail)}`, {
+        headers,
+      });
       if (res.ok) {
         const data = await res.json();
         if (data?.success && data.caregiver) {
@@ -92,13 +118,14 @@ class CentralSyncService {
     }
 
     try {
+      const headers = await this.getAuthHeaders(true);
       const res = await fetch(`${this.getBaseUrl()}/api/sync/link-patient`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ caregiverId, patientId, caregiverEmail, patientEmail, connectionCode }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data?.success) {
         return { success: true };
       }
@@ -113,9 +140,10 @@ class CentralSyncService {
     if (!caregiverId) return false;
 
     try {
+      const headers = await this.getAuthHeaders(true);
       const res = await fetch(`${this.getBaseUrl()}/api/sync/unlink-patient`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ caregiverId, patientId }),
       });
       return res.ok;
@@ -133,9 +161,12 @@ class CentralSyncService {
       if (caregiverId) q.set('caregiverId', caregiverId);
       if (caregiverEmail) q.set('caregiverEmail', caregiverEmail);
 
-      const res = await fetch(`${this.getBaseUrl()}/api/sync/get-assigned-patient?${q.toString()}`);
+      const headers = await this.getAuthHeaders();
+      const res = await fetch(`${this.getBaseUrl()}/api/sync/get-assigned-patient?${q.toString()}`, {
+        headers,
+      });
       if (res.ok) {
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (data?.success && data.patient) {
           return data.patient;
         }
@@ -144,21 +175,6 @@ class CentralSyncService {
       console.warn('[CentralSyncService] getAssignedPatient network note:', err);
     }
     return null;
-  }
-
-  public async getAllPatients(): Promise<any[]> {
-    try {
-      const res = await fetch(`${this.getBaseUrl()}/api/sync/all-patients`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.success && Array.isArray(data.patients)) {
-          return data.patients;
-        }
-      }
-    } catch (err) {
-      console.warn('[CentralSyncService] getAllPatients network note:', err);
-    }
-    return [];
   }
 }
 

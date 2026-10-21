@@ -13,10 +13,16 @@ export const OAuthCallbackPage: React.FC = () => {
       try {
         const targetRoute = await authService.handleOAuthCallback();
         if (isMounted) {
-          if (targetRoute === '/caregiver/dashboard' || targetRoute.startsWith('/caregiver')) {
+          const cleanTarget = (targetRoute || '').trim();
+          // Strictly validate return destination: allow only approved internal paths
+          if (cleanTarget === '/caregiver.html' || cleanTarget === '/caregiver/dashboard' || cleanTarget.startsWith('/caregiver')) {
             window.location.href = '/caregiver.html';
+          } else if (cleanTarget === '/doctor/dashboard') {
+            navigate('/doctor/dashboard', true);
+          } else if (cleanTarget === '/patient/dashboard') {
+            navigate('/patient/dashboard', true);
           } else {
-            navigate(targetRoute, true);
+            navigate('/patient/dashboard', true);
           }
         }
       } catch (err: any) {

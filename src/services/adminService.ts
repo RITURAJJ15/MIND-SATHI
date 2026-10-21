@@ -4,7 +4,7 @@
  * Dedicated platform administration, telemetry aggregation, and authentication
  * service for MIND SATHI.
  * 
- * Enforces exclusive administrator access for RITURAJ11 / RITURAJ@11.
+ * Enforces secure administrator access via serverless authentication.
  * Aggregates genuine user and game telemetry directly from Supabase, Dexie,
  * and local storage with non-destructive session handling.
  */
@@ -19,6 +19,7 @@ import { resolveApiUrl } from '../lib/apiConfig';
 
 const STORAGE_KEY_ADMIN_AUTH = 'ms_admin_authenticated';
 const STORAGE_KEY_ADMIN_USER = 'ms_admin_user';
+const STORAGE_KEY_ADMIN_TOKEN = 'ms_admin_token';
 
 export interface PlatformSummaryKPIs {
   totalUsers: number;
@@ -95,34 +96,22 @@ export interface StateDistributionItem {
   flag: string;
 }
 
-// SHA-256 helper for client-side cryptographic comparison
-async function hashSha256(str: string): Promise<string> {
-  if (typeof crypto !== 'undefined' && crypto.subtle) {
-    const encoder = new TextEncoder();
-    const data = encoder.encode(str);
-    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-    return Array.from(new Uint8Array(hashBuffer))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
-  }
-  return '';
-}
-
-// Precomputed SHA-256 hashes of allowed administrator credentials
-// - 'rituraj11'
-// - 'rituraj11@mindsathi.in'
-// - 'RITURAJ@11'
-const HASHED_ADMIN_IDS = [
-  'a6204f9316cc02b00626b920c0a46eada43f6dc6b79b0876eba9b3d77eb670f9',
-  '5a243507fe0f55fa77804da566e86d11d7db11008de933f1ecbcfcae6a926e9a',
-];
-const HASHED_ADMIN_PASS = 'bb8702700daa74a8d173e73cf707c9cf6cd9a2839dfb7a2e6461ea5de3527de8';
-
 class AdminService {
+  private getAdminAuthHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (typeof window !== 'undefined') {
+      const token = localStorage.getItem(STORAGE_KEY_ADMIN_TOKEN);
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+    }
+    return headers;
+  }
+
   /**
    * Authenticates the platform administrator.
-   * Credential verification is performed securely via serverless API
-   * or cryptographic hash verification so credentials are never exposed publicly.
+   * Credential verification is performed exclusively via the backend API.
+   * Client-side bypasses and credential hashes have been completely removed.
    */
   public async authenticateAdmin(
     identifier: string,
@@ -138,37 +127,6 @@ class AdminService {
       };
     }
 
-    const defaultAdminProfile: UserProfile = {
-      id: 'a1000000-0000-4000-a000-000000000003',
-      name: 'Rituraj (Platform Administrator)',
-      preferredName: 'Rituraj',
-      role: 'admin',
-      age: 32,
-      gender: 'male',
-      avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&fit=crop&q=80',
-      primaryLanguage: 'en',
-      city: 'Guwahati',
-      state: 'Assam',
-      northeastRegion: 'Assam',
-      isAyushmanMember: false,
-      ayushmanStatus: 'none',
-      pmjayStatus: 'none',
-      abhaStatus: 'none',
-      hasCompletedOnboarding: true,
-      familyMemberCount: 0,
-      caregiverIds: [],
-      clinicianIds: [],
-      accessibility: { fontSize: 'normal', highContrast: false, textToSpeechAuto: false, soundEffects: true, speechRate: 1.0 },
-      streakDays: 10,
-      totalXp: 1500,
-      level: 10,
-      levelTitle: 'Super Administrator',
-      createdAt: '2025-01-01T00:00:00.000Z',
-      email: 'rituraj11@mindsathi.in',
-      phone: '+91 98000 00000',
-    };
-
-    // 1. First attempt: Authenticate with serverless backend API
     try {
       const apiRes = await fetch(resolveApiUrl('/api/admin/login'), {
         method: 'POST',
@@ -176,53 +134,43 @@ class AdminService {
         body: JSON.stringify({ userId: cleanId, password: cleanPass }),
       });
 
-      if (apiRes.ok) {
-        const json = await apiRes.json();
-        if (json.success) {
-          const profile = json.profile || defaultAdminProfile;
-          localStorage.setItem(STORAGE_KEY_ADMIN_AUTH, 'true');
-          localStorage.setItem(STORAGE_KEY_ADMIN_USER, JSON.stringify(profile));
-          return { success: true, profile };
+      const json = await apiRes.json().catch(() => ({}));
+
+      if (apiRes.ok && json.success) {
+        const profile = json.profile;
+        if (json.token) {
+          localStorage.setItem(STORAGE_KEY_ADMIN_TOKEN, json.token);
         }
-      } else if (apiRes.status === 401) {
-        return {
-          success: false,
-          error: 'Invalid Administrator User ID or Password. Access denied.',
-        };
+        localStorage.setItem(STORAGE_KEY_ADMIN_AUTH, 'true');
+        if (profile) {
+          localStorage.setItem(STORAGE_KEY_ADMIN_USER, JSON.stringify(profile));
+        }
+        return { success: true, profile };
       }
-    } catch (apiErr) {
-      console.warn('[AdminService] Backend verification note, using secure cryptographic fallback:', apiErr);
-    }
 
-    // 2. Cryptographic hash comparison fallback
-    try {
-      const [idHash, passHash] = await Promise.all([
-        hashSha256(cleanId),
-        hashSha256(cleanPass),
-      ]);
-
-      const isMatch = HASHED_ADMIN_IDS.includes(idHash) && passHash === HASHED_ADMIN_PASS;
-
-      if (!isMatch) {
+      if (apiRes.status === 401) {
         return {
           success: false,
-          error: 'Invalid Administrator User ID or Password. Access denied.',
+          error: json.error || 'Invalid Administrator User ID or Password. Access denied.',
         };
       }
 
-      // Success via hash match
-      localStorage.setItem(STORAGE_KEY_ADMIN_AUTH, 'true');
-      localStorage.setItem(STORAGE_KEY_ADMIN_USER, JSON.stringify(defaultAdminProfile));
+      if (apiRes.status === 503) {
+        return {
+          success: false,
+          error: json.error || 'Administrator authentication is not configured on the server.',
+        };
+      }
 
-      return {
-        success: true,
-        profile: defaultAdminProfile,
-      };
-    } catch (hashErr) {
-      console.error('[AdminService] Auth hash error:', hashErr);
       return {
         success: false,
-        error: 'Authentication failed. Please try again.',
+        error: json.error || 'Authentication failed. Please verify credentials.',
+      };
+    } catch (apiErr) {
+      console.error('[AdminService] Backend verification connection error:', apiErr);
+      return {
+        success: false,
+        error: 'Authentication server unavailable. Please check your network connection.',
       };
     }
   }
@@ -239,6 +187,7 @@ class AdminService {
   public logoutAdmin(): void {
     localStorage.removeItem(STORAGE_KEY_ADMIN_AUTH);
     localStorage.removeItem(STORAGE_KEY_ADMIN_USER);
+    localStorage.removeItem(STORAGE_KEY_ADMIN_TOKEN);
   }
 
   /**
@@ -271,7 +220,9 @@ class AdminService {
 
     // 3. Serverless Admin Telemetry Endpoint (/api/admin/data)
     try {
-      const apiRes = await fetch(resolveApiUrl('/api/admin/data'));
+      const apiRes = await fetch(resolveApiUrl('/api/admin/data'), {
+        headers: this.getAdminAuthHeaders(),
+      });
       if (apiRes.ok) {
         const json = await apiRes.json();
         if (json.profiles && Array.isArray(json.profiles)) {
@@ -398,7 +349,9 @@ class AdminService {
 
     // 3. Serverless API game sessions
     try {
-      const apiRes = await fetch(resolveApiUrl('/api/admin/data'));
+      const apiRes = await fetch(resolveApiUrl('/api/admin/data'), {
+        headers: this.getAdminAuthHeaders(),
+      });
       if (apiRes.ok) {
         const json = await apiRes.json();
         if (json.gameSessions && Array.isArray(json.gameSessions)) {

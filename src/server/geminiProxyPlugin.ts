@@ -181,7 +181,7 @@ Provide personalized game recommendation and difficulty in valid JSON only.`;
   }
 
   // 1.1 7-Day Personalized Daily Plan
-  if (url === '/api/gemini/plan-personalize') {
+  if (url === '/api/gemini/plan-personalize' || url === '/api/gemini/personalize-plan') {
     try {
       const {
         dayOfWeek = 'Monday',
@@ -861,11 +861,123 @@ async function handleBhashiniApiRoute(req: http.IncomingMessage, res: http.Serve
   return true;
 }
 
+async function handleNavigatorApiRoute(req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
+  const url = req.url || '';
+  const [urlPath] = url.split('?');
+  if (urlPath !== '/api/caregiver/navigator') return false;
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(200, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    });
+    res.end();
+    return true;
+  }
+
+  try {
+    let body: any = {};
+    if (req.method === 'POST') {
+      body = await parseJsonBody(req).catch(() => ({}));
+    }
+
+    const queryParams = new URLSearchParams(url.split('?')[1] || '');
+    const queryObj: Record<string, string> = {};
+    queryParams.forEach((val, key) => { queryObj[key] = val; });
+
+    const mockReq: any = req;
+    mockReq.body = body;
+    mockReq.query = queryObj;
+
+    const mockRes: any = res;
+    mockRes.status = (code: number) => {
+      res.statusCode = code;
+      return mockRes;
+    };
+    mockRes.json = (data: any) => {
+      sendJson(res, res.statusCode || 200, data);
+      return mockRes;
+    };
+    mockRes.setHeader = (k: string, v: string) => {
+      res.setHeader(k, v);
+      return mockRes;
+    };
+
+    const navigatorModule = await import('../../api/caregiver/navigator');
+    const handler = navigatorModule.default;
+    await handler(mockReq, mockRes);
+    return true;
+  } catch (err: any) {
+    console.error('[Vite Proxy] Error in /api/caregiver/navigator:', err);
+    sendJson(res, 500, { success: false, error: 'PROXY_ERROR', message: err.message });
+    return true;
+  }
+}
+
+async function handleBookingAssistantApiRoute(req: http.IncomingMessage, res: http.ServerResponse): Promise<boolean> {
+  const url = req.url || '';
+  const [urlPath] = url.split('?');
+  if (urlPath !== '/api/caregiver/booking-assistant') return false;
+
+  if (req.method === 'OPTIONS') {
+    res.writeHead(200, {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    });
+    res.end();
+    return true;
+  }
+
+  try {
+    let body: any = {};
+    if (req.method === 'POST') {
+      body = await parseJsonBody(req).catch(() => ({}));
+    }
+
+    const queryParams = new URLSearchParams(url.split('?')[1] || '');
+    const queryObj: Record<string, string> = {};
+    queryParams.forEach((val, key) => { queryObj[key] = val; });
+
+    const mockReq: any = req;
+    mockReq.body = body;
+    mockReq.query = queryObj;
+
+    const mockRes: any = res;
+    mockRes.status = (code: number) => {
+      res.statusCode = code;
+      return mockRes;
+    };
+    mockRes.json = (data: any) => {
+      sendJson(res, res.statusCode || 200, data);
+      return mockRes;
+    };
+    mockRes.setHeader = (k: string, v: string) => {
+      res.setHeader(k, v);
+      return mockRes;
+    };
+
+    const bookingModule = await import('../../api/caregiver/booking-assistant');
+    const handler = bookingModule.default;
+    await handler(mockReq, mockRes);
+    return true;
+  } catch (err: any) {
+    console.error('[Vite Proxy] Error in /api/caregiver/booking-assistant:', err);
+    sendJson(res, 500, { success: false, error: 'PROXY_ERROR', message: err.message });
+    return true;
+  }
+}
+
 export function geminiBackendPlugin(): Plugin {
   return {
     name: 'vite-gemini-backend-proxy',
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
+        const handledBooking = await handleBookingAssistantApiRoute(req, res);
+        if (handledBooking) return;
+        const handledNavigator = await handleNavigatorApiRoute(req, res);
+        if (handledNavigator) return;
         const handledBhashini = await handleBhashiniApiRoute(req, res);
         if (handledBhashini) return;
         const handledGemini = await handleGeminiApiRoute(req, res);
@@ -877,6 +989,10 @@ export function geminiBackendPlugin(): Plugin {
     },
     configurePreviewServer(server) {
       server.middlewares.use(async (req, res, next) => {
+        const handledBooking = await handleBookingAssistantApiRoute(req, res);
+        if (handledBooking) return;
+        const handledNavigator = await handleNavigatorApiRoute(req, res);
+        if (handledNavigator) return;
         const handledBhashini = await handleBhashiniApiRoute(req, res);
         if (handledBhashini) return;
         const handledGemini = await handleGeminiApiRoute(req, res);
