@@ -77,11 +77,11 @@ function checkRateLimit(key: string, limit = 10, windowMs = 60000): boolean {
 // Periodically clean up old rate limit records
 setInterval(() => {
   const now = Date.now();
-  for (const [key, record] of rateLimitMap.entries()) {
+  rateLimitMap.forEach((record, key) => {
     if (now > record.resetAt) {
       rateLimitMap.delete(key);
     }
-  }
+  });
 }, 120000).unref?.();
 
 // ── SSRF & URL Safety Validation ─────────────────────────────────────────────
