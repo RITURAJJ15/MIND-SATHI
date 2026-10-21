@@ -17,10 +17,12 @@ import {
   KeyRound,
   ChevronRight,
   Info,
+  Sparkles,
 } from 'lucide-react';
 import { careNavigatorService } from '../services/careNavigatorService';
 import type { NavigatorSection, NavigatorResultItem } from '../../api/caregiver/navigator';
 import { useLanguage } from '../hooks/useLanguage';
+import { HelpMeBookModal } from '../components/caregiver/HelpMeBookModal';
 
 interface CareNavigatorPageProps {
   initialSection?: NavigatorSection;
@@ -36,6 +38,7 @@ export const CareNavigatorPage: React.FC<CareNavigatorPageProps> = ({ initialSec
   const [isConfigured, setIsConfigured] = useState<boolean>(true);
   const [configMessage, setConfigMessage] = useState<string>('');
   const [hasSearched, setHasSearched] = useState<boolean>(false);
+  const [selectedBookingProvider, setSelectedBookingProvider] = useState<NavigatorResultItem | null>(null);
 
   // Quick search suggestions per section
   const sectionDefaults: Record<NavigatorSection, { defaultQuery: string; placeholder: string; chips: string[] }> = {
@@ -458,23 +461,49 @@ export const CareNavigatorPage: React.FC<CareNavigatorPageProps> = ({ initialSec
                     </p>
                   </div>
 
-                  {/* Visit Official Source Link */}
-                  {item.url && (
-                    <a
-                      href={item.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="px-4 py-2 bg-emerald-50 hover:bg-emerald-600 text-emerald-800 hover:text-white font-extrabold text-xs rounded-xl border border-emerald-200 hover:border-emerald-600 transition-all flex items-center gap-1.5 shrink-0 self-start mt-1 cursor-pointer shadow-2xs group/btn"
-                    >
-                      <span>Official Link</span>
-                      <ExternalLink className="w-3.5 h-3.5 group-hover/btn:translate-x-0.5 group-hover/btn:-translate-y-0.5 transition-transform" />
-                    </a>
-                  )}
+                  {/* Action Buttons: Help Me Book & Official Link */}
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0 self-start mt-1">
+                    {/* Help Me Book action for Nearby Care Finder results */}
+                    {activeSection === 'care_finder' && item.url && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedBookingProvider(item)}
+                        className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold text-xs rounded-xl shadow-xs transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                        title="Get read-only assistance finding official appointment booking details"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-emerald-300" />
+                        <span>Help Me Book</span>
+                      </button>
+                    )}
+
+                    {/* Visit Official Source Link */}
+                    {item.url && (
+                      <a
+                        href={item.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-4 py-2 bg-emerald-50 hover:bg-emerald-600 text-emerald-800 hover:text-white font-extrabold text-xs rounded-xl border border-emerald-200 hover:border-emerald-600 transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs group/btn"
+                      >
+                        <span>Official Link</span>
+                        <ExternalLink className="w-3.5 h-3.5 group-hover/btn:translate-x-0.5 group-hover/btn:-translate-y-0.5 transition-transform" />
+                      </a>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
           </div>
         </div>
+      )}
+
+      {/* ── HELP ME BOOK MODAL ── */}
+      {selectedBookingProvider && (
+        <HelpMeBookModal
+          isOpen={Boolean(selectedBookingProvider)}
+          onClose={() => setSelectedBookingProvider(null)}
+          providerName={selectedBookingProvider.title}
+          providerUrl={selectedBookingProvider.url}
+        />
       )}
     </div>
   );
