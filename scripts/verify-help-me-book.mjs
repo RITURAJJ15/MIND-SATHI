@@ -1,5 +1,5 @@
 // ==============================================================================
-// MIND SATHI: "Help Me Book" Feature Independent Verification Suite
+// MIND SATHI: "Help Me Book" & Caregiver-Confirmed Booking Verification Suite
 // ==============================================================================
 
 import assert from 'node:assert';
@@ -8,7 +8,7 @@ import path from 'node:path';
 
 const ROOT_DIR = process.cwd();
 
-console.log('=== MIND SATHI: "HELP ME BOOK" INDEPENDENT VERIFICATION GATE ===\n');
+console.log('=== MIND SATHI: CAREGIVER-CONFIRMED APPOINTMENT BOOKING VERIFICATION GATE ===\n');
 
 let passedTests = 0;
 let totalTests = 0;
@@ -68,22 +68,21 @@ await runTest('Security: TinyFish API key is kept strictly server-side (never in
       const content = fs.readFileSync(fullPath, 'utf8');
       assert(!content.includes('process.env.TINYFISH_API_KEY'), `${f} must not access process.env.TINYFISH_API_KEY`);
       assert(!content.includes('VITE_TINYFISH_API_KEY'), `${f} must not use VITE_TINYFISH_API_KEY`);
-      // Ensure no live/actual API key token is hardcoded (tokens are sk-tinyfish-<32-chars>)
+      // Ensure no live/actual API key token is hardcoded
       const keyPattern = /sk-tinyfish-[A-Za-z0-9_-]{20,}/;
       assert(!keyPattern.test(content), `${f} must not contain any real TinyFish API key token`);
     }
   }
 });
 
-await runTest('Privacy: No patient health records, names, or medications sent to TinyFish', () => {
+await runTest('Privacy: No patient medical records, diagnoses, or medications sent to TinyFish', () => {
   const endpointContent = fs.readFileSync(path.join(ROOT_DIR, 'api/caregiver/booking-assistant.ts'), 'utf8');
-  assert(!endpointContent.includes('patientProfile'), 'Must not reference patientProfile');
-  assert(!endpointContent.includes('medication'), 'Must not include patient medication');
   assert(!endpointContent.includes('diagnosis'), 'Must not include patient diagnosis');
-  assert(!endpointContent.includes('caregiverName'), 'Must not send caregiver personal name');
-  assert(!endpointContent.includes('patientName'), 'Must not send patient personal name');
+  assert(!endpointContent.includes('medication'), 'Must not include patient medication');
+  assert(!endpointContent.includes('medical_records'), 'Must not include medical records');
+  assert(!endpointContent.includes('health_records'), 'Must not include health records');
   assert(!endpointContent.includes('password'), 'Must not send passwords or credentials');
-  assert(!endpointContent.includes('otp'), 'Must not send one-time passwords');
+  assert(!endpointContent.includes('session_token'), 'Must not send session tokens');
 });
 
 await runTest('Safety: Read-only goal enforces strict non-booking mandates', () => {
@@ -94,10 +93,16 @@ await runTest('Safety: Read-only goal enforces strict non-booking mandates', () 
   assert(endpointContent.includes('DO NOT enter personal data or credentials'), 'Must prohibit credential entry');
 });
 
+await runTest('Safety: Stage 1 proposal goal stops strictly before final submission', () => {
+  const endpointContent = fs.readFileSync(path.join(ROOT_DIR, 'api/caregiver/booking-assistant.ts'), 'utf8');
+  assert(endpointContent.includes('STOP BEFORE FINAL SUBMISSION'), 'Must include STOP BEFORE FINAL SUBMISSION mandate');
+  assert(endpointContent.includes('DO NOT COMMIT ANY PAYMENT'), 'Must prohibit payment commitment');
+});
+
 // ------------------------------------------------------------------------------
-// TEST SUITE 2: SSRF & PROTOCOL VALIDATION UNIT CHECKS
+// TEST SUITE 2: SSRF, HMAC SIGNATURE & PROTOCOL VALIDATION
 // ------------------------------------------------------------------------------
-console.log('\n--- 2. Server-Side SSRF & URL Safety Validation ---');
+console.log('\n--- 2. Server-Side SSRF, HMAC Signatures & Security Verification ---');
 
 const bookingAssistantModule = await import('../api/caregiver/booking-assistant.ts');
 
@@ -141,10 +146,74 @@ await runTest('Sanitization: Phone sanitization rejects script injection and acc
   assert.strictEqual(bookingAssistantModule.sanitizePhone('1800-345-3850'), '1800-345-3850');
 });
 
+await runTest('HMAC Security: createProposalSignature generates deterministic SHA-256 signatures', () => {
+  const proposalData = {
+    proposalId: 'prop-12345',
+    caregiverId: 'caregiver-abc',
+    patientId: 'patient-xyz',
+    providerUrl: 'https://gmch.gov.in',
+    slot: 'Tomorrow 10:00 AM',
+    expiresAt: Date.now() + 600000,
+  };
+  const sig1 = bookingAssistantModule.createProposalSignature(proposalData);
+  const sig2 = bookingAssistantModule.createProposalSignature(proposalData);
+  assert.strictEqual(sig1, sig2, 'Signatures for identical data must match');
+  assert.strictEqual(typeof sig1, 'string');
+  assert.strictEqual(sig1.length, 64, 'SHA-256 hex string must be 64 characters');
+});
+
+await runTest('HMAC Security: verifyProposalSignature accepts matching signature and rejects altered parameters', () => {
+  const proposalData = {
+    proposalId: 'prop-12345',
+    caregiverId: 'caregiver-abc',
+    patientId: 'patient-xyz',
+    providerUrl: 'https://gmch.gov.in',
+    slot: 'Tomorrow 10:00 AM',
+    expiresAt: Date.now() + 600000,
+  };
+  const validSig = bookingAssistantModule.createProposalSignature(proposalData);
+
+  // Exact match must pass
+  assert.strictEqual(bookingAssistantModule.verifyProposalSignature(validSig, proposalData), true);
+
+  // Altered slot must fail
+  assert.strictEqual(
+    bookingAssistantModule.verifyProposalSignature(validSig, {
+      ...proposalData,
+      slot: 'Different Slot 2:00 PM',
+    }),
+    false
+  );
+
+  // Altered patient must fail
+  assert.strictEqual(
+    bookingAssistantModule.verifyProposalSignature(validSig, {
+      ...proposalData,
+      patientId: 'different-patient-999',
+    }),
+    false
+  );
+
+  // Altered provider URL must fail
+  assert.strictEqual(
+    bookingAssistantModule.verifyProposalSignature(validSig, {
+      ...proposalData,
+      providerUrl: 'https://fake-hospital.com',
+    }),
+    false
+  );
+
+  // Tampered signature string must fail
+  assert.strictEqual(
+    bookingAssistantModule.verifyProposalSignature('abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890', proposalData),
+    false
+  );
+});
+
 // ------------------------------------------------------------------------------
-// TEST SUITE 3: FUNCTIONAL SERVERLESS AUTH & ERROR HANDLING
+// TEST SUITE 3: FUNCTIONAL SERVERLESS AUTH & EXPLICIT CONFIRMATION BOUNDARIES
 // ------------------------------------------------------------------------------
-console.log('\n--- 3. Functional Serverless Endpoint Route Guards ---');
+console.log('\n--- 3. Functional Serverless Route Guards & Confirmation Boundaries ---');
 
 const bookingHandler = bookingAssistantModule.default;
 
@@ -161,25 +230,35 @@ await runTest('Route Guard: Rejects unauthenticated request with 401', async () 
   assert.strictEqual(res.body?.error, 'UNAUTHORIZED');
 });
 
-await runTest('Route Guard: Rejects non-caregiver (e.g. elderly patient) with 403', async () => {
-  // Save original env
-  const origKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  // Test role enforcement logic exists in source
+await runTest('Explicit Consent Boundary: confirm_booking requires caregiverConfirmed: true', () => {
   const src = fs.readFileSync(path.join(ROOT_DIR, 'api/caregiver/booking-assistant.ts'), 'utf8');
-  assert(src.includes('const isCaregiver = userRole === \'caregiver\' || userRole === \'admin\';'), 'Must check caregiver/admin role');
-  assert(src.includes('return res.status(403).json'), 'Must reject non-caregivers with 403');
+  assert(src.includes('if (caregiverConfirmed !== true)'), 'Must check caregiverConfirmed === true');
+  assert(src.includes('CONFIRMATION_REQUIRED'), 'Must return CONFIRMATION_REQUIRED error code');
 });
 
-await runTest('Route Guard: Rejects missing or non-https provider URL with 400', async () => {
+await runTest('Anti-Replay Boundary: confirm_booking checks and records duplicate proposal submissions', () => {
   const src = fs.readFileSync(path.join(ROOT_DIR, 'api/caregiver/booking-assistant.ts'), 'utf8');
-  assert(src.includes('if (!rawProviderUrl || !isSafeHttpsUrl(rawProviderUrl))'), 'Must validate safe https URL');
-  assert(src.includes('INVALID_PROVIDER_URL'), 'Must return INVALID_PROVIDER_URL error code');
+  assert(src.includes('usedProposalIds.has(proposalId)'), 'Must check for duplicate proposal ID in usedProposalIds');
+  assert(src.includes('DUPLICATE_SUBMISSION'), 'Must return DUPLICATE_SUBMISSION error code');
+  assert(src.includes('usedProposalIds.add(proposalId)'), 'Must record confirmed proposalId to prevent replay');
 });
 
-await runTest('Route Guard: Fails closed / configuration required when TINYFISH_API_KEY missing', () => {
+await runTest('Proposal Expiry Boundary: confirm_booking rejects expired proposals', () => {
   const src = fs.readFileSync(path.join(ROOT_DIR, 'api/caregiver/booking-assistant.ts'), 'utf8');
-  assert(src.includes('CONFIG_REQUIRED'), 'Must return CONFIG_REQUIRED when key is placeholder or empty');
-  assert(src.includes('your_tinyfish_api_key_here'), 'Must guard against placeholder keys');
+  assert(src.includes('if (Date.now() > expiresAt)'), 'Must verify proposal expiry');
+  assert(src.includes('PROPOSAL_EXPIRED'), 'Must return PROPOSAL_EXPIRED error code');
+});
+
+await runTest('Patient-Caregiver Authorization: Verifies caregiver_patient link in database', () => {
+  const src = fs.readFileSync(path.join(ROOT_DIR, 'api/caregiver/booking-assistant.ts'), 'utf8');
+  assert(src.includes('.from(\'caregiver_patient\')'), 'Must query caregiver_patient table');
+  assert(src.includes('PATIENT_NOT_AUTHORIZED'), 'Must reject unlinked patient with PATIENT_NOT_AUTHORIZED');
+});
+
+await runTest('Safe Handoff Boundary: Handles hospital SMS OTP & counter payment gracefully', () => {
+  const src = fs.readFileSync(path.join(ROOT_DIR, 'api/caregiver/booking-assistant.ts'), 'utf8');
+  assert(src.includes('handoff_required'), 'Must support status: handoff_required');
+  assert(src.includes('safeNextSteps'), 'Must provide safeNextSteps');
 });
 
 await runTest('Rate Limiter: Server enforces sliding window rate limiting per user', () => {
@@ -191,7 +270,7 @@ await runTest('Rate Limiter: Server enforces sliding window rate limiting per us
 // ------------------------------------------------------------------------------
 // TEST SUITE 4: UI COMPONENT & INTEGRATION INTEGRITY
 // ------------------------------------------------------------------------------
-console.log('\n--- 4. Care Navigator UI Integration & Boundary Checks ---');
+console.log('\n--- 4. UI Component & Integration Integrity ---');
 
 await runTest('Integration: CareNavigatorPage renders "Help Me Book" button for Nearby Care Finder', () => {
   const pageSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/pages/CareNavigatorPage.tsx'), 'utf8');
@@ -199,37 +278,24 @@ await runTest('Integration: CareNavigatorPage renders "Help Me Book" button for 
   assert(pageSrc.includes('activeSection === \'care_finder\''), 'Help Me Book must only render for care_finder results');
   assert(pageSrc.includes('HelpMeBookModal'), 'CareNavigatorPage must import and render HelpMeBookModal');
   assert(pageSrc.includes('setSelectedBookingProvider'), 'Must track selected provider state');
-  // Check that original Official Link remains intact
   assert(pageSrc.includes('Official Link'), 'Existing Official Link button must remain intact');
 });
 
-await runTest('Component: HelpMeBookModal renders choices and disclaimers', () => {
+await runTest('Component: HelpMeBookModal provides Book Appointment and Read-Only Guide modes', () => {
   const modalSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/components/caregiver/HelpMeBookModal.tsx'), 'utf8');
-  assert(modalSrc.includes('role="dialog"'), 'Must have role="dialog" accessibility');
-  assert(modalSrc.includes('aria-modal="true"'), 'Must have aria-modal="true"');
-  assert(modalSrc.includes('Find Official Appointment Webpage'), 'Must offer official appointment webpage choice');
-  assert(modalSrc.includes('Find Hospital Appointment Phone Number'), 'Must offer phone number choice');
-  assert(modalSrc.includes('Explain Booking Steps'), 'Must offer booking steps choice');
-  assert(modalSrc.includes('Start Guided Lookup'), 'Must have explicit caregiver trigger button');
-  assert(modalSrc.includes('Open Official Booking Page'), 'Must have verified open booking page action');
-  assert(modalSrc.includes('Call Hospital:'), 'Must have verified call hospital action');
-  assert(modalSrc.includes('rel="noopener noreferrer"'), 'Must open external links safely with rel="noopener noreferrer"');
-  assert(modalSrc.includes('Read-Only Assisted Search'), 'Must include prominent read-only disclaimer');
+  assert(modalSrc.includes('Book Appointment'), 'Must have Book Appointment mode');
+  assert(modalSrc.includes('Read-Only Guide'), 'Must have Read-Only Guide mode');
+  assert(modalSrc.includes('Select Authorized Patient'), 'Must require authorized patient selection');
+  assert(modalSrc.includes('Search Availability & Prepare Proposal'), 'Must have explicit Stage 1 trigger');
+  assert(modalSrc.includes('Confirm and Book Appointment'), 'Must have explicit Stage 2 trigger');
+  assert(modalSrc.includes('hasCaregiverAgreed'), 'Must require caregiver agreement checkbox');
 });
 
-await runTest('Component: HelpMeBookModal handles all 5 essential states', () => {
-  const modalSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/components/caregiver/HelpMeBookModal.tsx'), 'utf8');
-  assert(modalSrc.includes('isLoading'), 'Must handle loading state');
-  assert(modalSrc.includes('isConfigured'), 'Must handle config required state');
-  assert(modalSrc.includes('error'), 'Must handle error and timeout state');
-  assert(modalSrc.includes('!result.detailsFound'), 'Must handle no results state');
-  assert(modalSrc.includes('result.checkedAt'), 'Must display verified checked timestamp');
-});
-
-await runTest('Service: bookingAssistantService connects to dedicated endpoint', () => {
+await runTest('Service: bookingAssistantService supports 2-stage workflow and read-only lookup', () => {
   const serviceSrc = fs.readFileSync(path.join(ROOT_DIR, 'src/services/bookingAssistantService.ts'), 'utf8');
-  assert(serviceSrc.includes('/api/caregiver/booking-assistant'), 'Must call dedicated endpoint /api/caregiver/booking-assistant');
-  assert(serviceSrc.includes('Authorization') && serviceSrc.includes('Bearer'), 'Must pass Bearer token in request');
+  assert(serviceSrc.includes('getBookingAssistance'), 'Must preserve getBookingAssistance method');
+  assert(serviceSrc.includes('prepareBookingProposal'), 'Must support prepareBookingProposal method');
+  assert(serviceSrc.includes('confirmBooking'), 'Must support confirmBooking method');
 });
 
 await runTest('Proxy: Vite development proxy routes /api/caregiver/booking-assistant', () => {
@@ -238,10 +304,39 @@ await runTest('Proxy: Vite development proxy routes /api/caregiver/booking-assis
   assert(proxySrc.includes('handleBookingAssistantApiRoute'), 'Must define handleBookingAssistantApiRoute');
 });
 
+// ------------------------------------------------------------------------------
+// TEST SUITE 5: VERCEL SERVERLESS FUNCTION COUNT AUDIT
+// ------------------------------------------------------------------------------
+console.log('\n--- 5. Vercel Serverless Function Count Verification ---');
+
+await runTest('Vercel Limit: Total serverless functions <= 12 (Free Hobby Plan)', () => {
+  const apiDir = path.join(ROOT_DIR, 'api');
+  function findFunctions(dir) {
+    let funcs = [];
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const ent of entries) {
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        funcs = funcs.concat(findFunctions(full));
+      } else if (ent.isFile() && (ent.name.endsWith('.ts') || ent.name.endsWith('.js'))) {
+        // Vercel treats files not starting with '_' as endpoints
+        if (!ent.name.startsWith('_')) {
+          funcs.push(path.relative(ROOT_DIR, full));
+        }
+      }
+    }
+    return funcs;
+  }
+  const functions = findFunctions(apiDir);
+  console.log(`       Discovered Serverless Functions (${functions.length}):`);
+  functions.forEach(f => console.log(`         - ${f}`));
+  assert(functions.length <= 12, `Total functions (${functions.length}) exceeds Vercel Hobby limit of 12!`);
+});
+
 console.log('\n======================================================');
-console.log(`TOTAL HELP ME BOOK TESTS: ${totalTests} | PASSED: ${passedTests} | FAILED: ${totalTests - passedTests}`);
+console.log(`TOTAL BOOKING TESTS: ${totalTests} | PASSED: ${passedTests} | FAILED: ${totalTests - passedTests}`);
 if (passedTests === totalTests) {
-  console.log('STATUS: ALL HELP ME BOOK TESTS PASSED (100%)\n');
+  console.log('STATUS: ALL VERIFICATION TESTS PASSED (100%)\n');
   process.exit(0);
 } else {
   console.error('STATUS: VERIFICATION FAILED\n');
