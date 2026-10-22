@@ -188,7 +188,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         .select('caregiver_id')
         .eq('patient_id', patientId)
         .neq('caregiver_id', caregiverId)
-        .eq('status', 'approved')
         .limit(1)
         .maybeSingle();
 
@@ -204,9 +203,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         {
           caregiver_id: caregiverId,
           patient_id: patientId,
-          relationship,
-          status: 'approved',
-          approved_at: new Date().toISOString(),
         },
         { onConflict: 'caregiver_id,patient_id' }
       );
@@ -265,9 +261,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Query caregiver_patient join
       const { data: linkRows, error: linkErr } = await supabase
         .from('caregiver_patient')
-        .select('patient_id, relationship, status, approved_at')
+        .select('patient_id, created_at')
         .eq('caregiver_id', cgId)
-        .eq('status', 'approved')
         .limit(1);
 
       if (linkErr || !linkRows || linkRows.length === 0) {

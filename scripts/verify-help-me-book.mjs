@@ -249,10 +249,91 @@ await runTest('Proposal Expiry Boundary: confirm_booking rejects expired proposa
   assert(src.includes('PROPOSAL_EXPIRED'), 'Must return PROPOSAL_EXPIRED error code');
 });
 
-await runTest('Patient-Caregiver Authorization: Verifies caregiver_patient link in database', () => {
+await runTest('Patient-Caregiver Authorization: Verifies caregiver_patient link in database without invalid columns', () => {
   const src = fs.readFileSync(path.join(ROOT_DIR, 'api/caregiver/booking-assistant.ts'), 'utf8');
   assert(src.includes('.from(\'caregiver_patient\')'), 'Must query caregiver_patient table');
   assert(src.includes('PATIENT_NOT_AUTHORIZED'), 'Must reject unlinked patient with PATIENT_NOT_AUTHORIZED');
+  assert(!src.includes('.select(\'status\')'), 'Must not query non-existent status column on caregiver_patient');
+});
+
+await runTest('Focused Authorization: Authorized active link succeeds', async () => {
+  const mockUserClient = {
+    from: (table) => ({
+      select: (cols) => ({
+        eq: (col1, val1) => ({
+          eq: (col2, val2) => ({
+            limit: () => {
+              if (table === 'caregiver_patient' && val1 === 'cg-1' && val2 === 'pt-1') {
+                return { data: [{ id: 'link-1', caregiver_id: 'cg-1', patient_id: 'pt-1' }], error: null };
+              }
+              return { data: [], error: null };
+            },
+          }),
+        }),
+      }),
+    }),
+  };
+
+  const res = await bookingAssistantModule.verifyCaregiverPatientLink(
+    mockUserClient,
+    null,
+    'cg-1',
+    'pt-1',
+    false
+  );
+  assert.strictEqual(res.authorized, true, 'Authorized link must succeed');
+});
+
+await runTest('Focused Authorization: Missing or unlinked patient is rejected', async () => {
+  const mockUserClient = {
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          eq: () => ({
+            limit: () => ({ data: [], error: null }),
+          }),
+        }),
+      }),
+    }),
+  };
+
+  const res = await bookingAssistantModule.verifyCaregiverPatientLink(
+    mockUserClient,
+    null,
+    'cg-1',
+    'pt-unlinked',
+    false
+  );
+  assert.strictEqual(res.authorized, false, 'Unlinked patient must be rejected');
+});
+
+await runTest('Focused Authorization: Another caregiver cannot access the patient', async () => {
+  const mockUserClient = {
+    from: (table) => ({
+      select: () => ({
+        eq: (col1, val1) => ({
+          eq: (col2, val2) => ({
+            limit: () => {
+              // Patient is linked to cg-1, but cg-2 is requesting
+              if (table === 'caregiver_patient' && val1 === 'cg-1' && val2 === 'pt-1') {
+                return { data: [{ id: 'link-1', caregiver_id: 'cg-1', patient_id: 'pt-1' }], error: null };
+              }
+              return { data: [], error: null };
+            },
+          }),
+        }),
+      }),
+    }),
+  };
+
+  const res = await bookingAssistantModule.verifyCaregiverPatientLink(
+    mockUserClient,
+    null,
+    'cg-2', // Different caregiver
+    'pt-1',
+    false
+  );
+  assert.strictEqual(res.authorized, false, 'Other caregiver must be rejected');
 });
 
 await runTest('Safe Handoff Boundary: Handles hospital SMS OTP & counter payment gracefully', () => {

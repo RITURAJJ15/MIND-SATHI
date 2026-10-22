@@ -256,6 +256,100 @@ function buildBookingSubmissionGoal(
   return `On the official appointment booking page for "${providerName}", locate the outpatient request form for ${department}. Provide ONLY the patient full name "${patientName}" and contact phone "${patientPhone}" for the requested slot "${slot}". DO NOT ENTER CREDIT CARDS OR PAYMENT DETAILS. DO NOT ACCEPT OPTIONAL CHARGES. DO NOT CREATE UNRELATED ACCOUNTS. If the hospital portal requires patient SMS OTP or counter prepayment, report that direct SMS OTP or on-site counter payment is required. Otherwise, retrieve the official appointment confirmation reference code.`;
 }
 
+// ── Authoritative Caregiver ↔ Patient Authorization Verification ─────────────
+async function fetchPatientProfile(
+  userClient: any,
+  supabaseServer: any,
+  patientId: string
+) {
+  if (userClient) {
+    try {
+      const { data } = await userClient
+        .from('profiles')
+        .select('id, full_name, preferred_name, phone')
+        .eq('id', patientId)
+        .maybeSingle();
+      if (data) return data;
+    } catch {}
+  }
+  if (supabaseServer) {
+    try {
+      const { data } = await supabaseServer
+        .from('profiles')
+        .select('id, full_name, preferred_name, phone')
+        .eq('id', patientId)
+        .maybeSingle();
+      if (data) return data;
+    } catch {}
+  }
+  return null;
+}
+
+export async function verifyCaregiverPatientLink(
+  userClient: any,
+  supabaseServer: any,
+  caregiverId: string,
+  patientId: string,
+  isCallerAdmin: boolean
+): Promise<{ authorized: boolean; patientName: string; patientPhone: string }> {
+  // Enforce 1-to-1 patient authorization:
+  // Must verify that an active row in public.caregiver_patient connects caregiverId ↔ patientId
+  let hasLink = false;
+
+  if (!isCallerAdmin) {
+    // 1. Primary check via authenticated client (respecting RLS)
+    // Note: public.caregiver_patient schema contains id, caregiver_id, patient_id, created_at
+    if (userClient) {
+      try {
+        const { data: linkRows, error: linkErr } = await userClient
+          .from('caregiver_patient')
+          .select('id, caregiver_id, patient_id')
+          .eq('caregiver_id', caregiverId)
+          .eq('patient_id', patientId)
+          .limit(1);
+
+        if (!linkErr && Array.isArray(linkRows) && linkRows.length > 0) {
+          hasLink = true;
+        }
+      } catch (e) {
+        console.warn('[BookingAssistant:Auth] userClient link check notice:', e);
+      }
+    }
+
+    // 2. Authoritative database verification using verified callerUser.id
+    if (!hasLink && supabaseServer) {
+      try {
+        const { data: sRows, error: sErr } = await supabaseServer
+          .from('caregiver_patient')
+          .select('id, caregiver_id, patient_id')
+          .eq('caregiver_id', caregiverId)
+          .eq('patient_id', patientId)
+          .limit(1);
+
+        if (!sErr && Array.isArray(sRows) && sRows.length > 0) {
+          hasLink = true;
+        }
+      } catch (e) {
+        console.warn('[BookingAssistant:Auth] supabaseServer link check notice:', e);
+      }
+    }
+  } else {
+    // Admin role is permitted across patients
+    hasLink = true;
+  }
+
+  if (!hasLink) {
+    return { authorized: false, patientName: '', patientPhone: '' };
+  }
+
+  // Retrieve verified minimal profile directly from Supabase (Zero PII leak: strictly Name & Phone only)
+  const ptProfile = await fetchPatientProfile(userClient, supabaseServer, patientId);
+  const patientName = sanitizeText(ptProfile?.preferred_name || ptProfile?.full_name || 'Patient', 100);
+  const patientPhone = sanitizePhone(ptProfile?.phone) || 'Contact upon arrival';
+
+  return { authorized: true, patientName, patientPhone };
+}
+
 // ── Main Serverless Handler ───────────────────────────────────────────────────
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -321,6 +415,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const userRole = profile?.role || callerUser.user_metadata?.role;
   const isCaregiver = userRole === 'caregiver' || userRole === 'admin';
+  const isCallerAdmin = userRole === 'admin';
 
   if (!isCaregiver) {
     return res.status(403).json({
@@ -386,33 +481,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // Authorize caregiver-patient relationship from authoritative database
-    const { data: linkRows, error: linkErr } = await userClient
-      .from('caregiver_patient')
-      .select('status')
-      .eq('caregiver_id', callerUser.id)
-      .eq('patient_id', patientId);
-
-    const hasActiveLink = !linkErr && Array.isArray(linkRows) && linkRows.some(
-      (r: any) => r.status === 'approved' || r.status === null || r.status === undefined
+    const authResult = await verifyCaregiverPatientLink(
+      userClient,
+      supabase,
+      callerUser.id,
+      patientId,
+      isCallerAdmin
     );
 
-    if (!hasActiveLink) {
+    if (!authResult.authorized) {
       return res.status(403).json({
         success: false,
         error: 'PATIENT_NOT_AUTHORIZED',
-        message: 'You are not authorized to book appointments for this patient under MIND SATHI consent rules.',
+        message: 'You are not authorized to book appointments for this patient under MIND SATHI consent rules. Please verify the patient is connected in your Caregiver Portal.',
       });
     }
 
-    // Retrieve verified minimal profile directly from Supabase (Zero PII leak: strictly Name & Phone only)
-    const { data: patientProfile } = await userClient
-      .from('profiles')
-      .select('id, full_name, preferred_name, phone')
-      .eq('id', patientId)
-      .maybeSingle();
-
-    const patientName = sanitizeText(patientProfile?.preferred_name || patientProfile?.full_name || 'Patient', 100);
-    const patientPhone = sanitizePhone(patientProfile?.phone) || 'Contact upon arrival';
+    const { patientName, patientPhone } = authResult;
     const sanitizedProviderName = sanitizeText(rawProviderName, 120);
 
     // Call TinyFish Agent with strictly pre-submission goal
@@ -596,33 +681,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // Re-verify caregiver-patient link
-    const { data: linkRows, error: linkErr } = await userClient
-      .from('caregiver_patient')
-      .select('status')
-      .eq('caregiver_id', callerUser.id)
-      .eq('patient_id', patientId);
-
-    const hasActiveLink = !linkErr && Array.isArray(linkRows) && linkRows.some(
-      (r: any) => r.status === 'approved' || r.status === null || r.status === undefined
+    const authResult = await verifyCaregiverPatientLink(
+      userClient,
+      supabase,
+      callerUser.id,
+      patientId,
+      isCallerAdmin
     );
 
-    if (!hasActiveLink) {
+    if (!authResult.authorized) {
       return res.status(403).json({
         success: false,
         error: 'PATIENT_NOT_AUTHORIZED',
-        message: 'You are not authorized to book for this patient.',
+        message: 'You are not authorized to book appointments for this patient under MIND SATHI consent rules.',
       });
     }
 
-    // Retrieve verified minimal profile directly from Supabase
-    const { data: patientProfile } = await userClient
-      .from('profiles')
-      .select('id, full_name, preferred_name, phone')
-      .eq('id', patientId)
-      .maybeSingle();
-
-    const patientName = sanitizeText(patientProfile?.preferred_name || patientProfile?.full_name || 'Patient', 100);
-    const patientPhone = sanitizePhone(patientProfile?.phone) || 'Contact upon arrival';
+    const { patientName, patientPhone } = authResult;
 
     // Mark proposal as consumed to prevent replay
     usedProposalIds.add(proposalId);
