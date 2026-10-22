@@ -292,6 +292,7 @@ class AuthService {
             }
             if (!this.session || this.session.user.id === newSession.user.id) {
               await this.syncProfileFromSupabase(newSession.user.id, newSession.user.email || '');
+              syncService.syncOfflineChanges(true).catch(() => {});
             }
           }
         } else if (event === 'SIGNED_OUT') {

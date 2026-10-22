@@ -1608,6 +1608,10 @@ class DailyPlanService {
 
     // 2. Queue durable offline mutation for Supabase auto-sync with idempotency key
     const isRealUser = userId.includes('-') && userId.length > 20;
+    const dateObj = new Date(dateStr);
+    const dayOfWeek = isNaN(dateObj.getTime()) ? 'Thursday' : dateObj.toLocaleDateString('en-US', { weekday: 'long' });
+    const focusArea = currentPlan.focusArea || 'Cognitive Agility';
+
     if (isRealUser) {
       syncService.recordMutation({
         userId,
@@ -1617,6 +1621,8 @@ class DailyPlanService {
         operation: 'upsert',
         payload: {
           planDate: dateStr,
+          dayOfWeek,
+          focusArea,
           completedTaskIds: updatedIds,
           earnedXp,
           isAllCompleted,
@@ -1636,7 +1642,10 @@ class DailyPlanService {
             .upsert({
               patient_id: userId,
               plan_date: dateStr,
+              day_of_week: dayOfWeek,
+              focus_area: focusArea,
               tasks: updatedTasks,
+              completed_task_ids: updatedIds,
               earned_xp: earnedXp,
               is_all_completed: isAllCompleted,
               updated_at: new Date().toISOString(),

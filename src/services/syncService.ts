@@ -17,14 +17,26 @@ export interface SyncInfo {
   lastError: string | null;
 }
 
+// Helper: wrap promises with finite timeout to prevent infinite hangs on flaky networks
+function withTimeout<T>(promise: Promise<T> | PromiseLike<T>, timeoutMs = 8000, errorMsg = 'Operation timed out'): Promise<T> {
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(errorMsg)), timeoutMs)),
+  ]);
+}
+
 class SyncService {
   private isOnline: boolean = typeof navigator !== 'undefined' ? navigator.onLine : true;
   private isSyncing: boolean = false;
+  private syncStartTime: number = 0;
   private lastError: string | null = null;
   private lastSyncTime: string | null = null;
   private listeners: Set<(info: SyncInfo) => void> = new Set();
   private initialized: boolean = false;
   private heartbeatInterval: any = null;
+  private watchdogInterval: any = null;
+  private syncDebounceTimer: any = null;
+  private needsSyncAgain: boolean = false;
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -59,6 +71,23 @@ class SyncService {
       });
     }
 
+    // Auto-sync triggered from other components/tabs
+    if (typeof window !== 'undefined') {
+      window.addEventListener('mind_sathi_trigger_sync', () => {
+        if (this.isOnline) {
+          this.triggerDebouncedSync(100);
+        }
+      });
+
+      if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+        navigator.serviceWorker.addEventListener('message', (event) => {
+          if (event.data?.type === 'TRIGGER_OFFLINE_SYNC' && this.isOnline) {
+            this.triggerDebouncedSync(100);
+          }
+        });
+      }
+    }
+
     // Periodic check every 30 seconds if online to sync any pending queue
     this.heartbeatInterval = setInterval(async () => {
       if (this.isOnline && !this.isSyncing) {
@@ -68,6 +97,15 @@ class SyncService {
         }
       }
     }, 30000);
+
+    // Watchdog check: prevent stuck 'syncing' states (> 15 seconds)
+    this.watchdogInterval = setInterval(() => {
+      if (this.isSyncing && this.syncStartTime > 0 && Date.now() - this.syncStartTime > 15000) {
+        console.warn('[SyncService] Watchdog detected stuck sync lock. Force resetting isSyncing to false.');
+        this.isSyncing = false;
+        this.notify();
+      }
+    }, 5000);
 
     // Restore lastSyncTime from Dexie
     try {
@@ -85,6 +123,24 @@ class SyncService {
         this.syncOfflineChanges(true);
       }, 1500);
     }
+  }
+
+  /**
+   * Automatically debounces and triggers sync after mutation writes.
+   * Batches rapid successive operations (e.g. game session + XP progress + daily plan).
+   */
+  public triggerDebouncedSync(delayMs = 150) {
+    if (!this.isOnline) return;
+    if (this.syncDebounceTimer) {
+      clearTimeout(this.syncDebounceTimer);
+    }
+    this.syncDebounceTimer = setTimeout(() => {
+      if (this.isOnline) {
+        this.syncOfflineChanges(false).catch((err) => {
+          console.warn('[SyncService] Auto-sync notice:', err);
+        });
+      }
+    }, delayMs);
   }
 
   public subscribe(listener: (info: SyncInfo) => void): () => void {
@@ -108,6 +164,9 @@ class SyncService {
 
     if (code === '401' || msg.includes('JWT') || msg.includes('token') || msg.includes('auth') || msg.includes('Unauthorized')) {
       return 'Authentication session expired. Please sign in again.';
+    }
+    if (code === '42501' || msg.includes('row-level security') || msg.includes('violates row-level security')) {
+      return 'Cloud synchronization requires active sign-in. Data preserved on device.';
     }
     if (code === '42703' || msg.includes('column') || msg.includes('does not exist')) {
       return 'Server schema mismatch. Safe fallback applied.';
@@ -290,11 +349,9 @@ class SyncService {
 
     await this.notify();
 
-    // If online, immediately trigger background sync
+    // If online, immediately trigger debounced background sync
     if (this.isOnline) {
-      this.syncOfflineChanges(false).catch((err) => {
-        console.warn('[SyncService] Background sync note:', err);
-      });
+      this.triggerDebouncedSync(100);
     }
 
     return mutation;
@@ -315,10 +372,18 @@ class SyncService {
     }
 
     if (this.isSyncing) {
-      return { success: true, syncedCount: 0 };
+      // If manual sync is requested and previous sync has been running for > 5 seconds, break the stuck lock
+      if (isManual && this.syncStartTime > 0 && Date.now() - this.syncStartTime > 5000) {
+        console.warn('[SyncService] Breaking stuck sync lock for manual sync attempt.');
+        this.isSyncing = false;
+      } else {
+        this.needsSyncAgain = true;
+        return { success: true, syncedCount: 0 };
+      }
     }
 
     this.isSyncing = true;
+    this.syncStartTime = Date.now();
     await this.notify();
 
     let syncedCount = 0;
@@ -330,6 +395,16 @@ class SyncService {
       const mutations = await offlineDb.offlineMutations
         .filter((m) => m.status === 'pending' || m.status === 'failed')
         .toArray();
+
+      // Reset retry counts on manual sync to give stuck records an immediate fresh attempt
+      if (isManual) {
+        for (const m of mutations) {
+          if (m.retryCount > 0) {
+            await offlineDb.offlineMutations.update(m.id, { retryCount: 0 });
+            m.retryCount = 0;
+          }
+        }
+      }
 
       // Sort by creation time to preserve causality
       mutations.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
@@ -345,45 +420,71 @@ class SyncService {
         try {
           if (!isRealUser) {
             // Local guest/demo mutation marked as synced locally
-            await offlineDb.offlineMutations.update(mut.id, {
-              status: 'synced',
-              updatedAt: new Date().toISOString(),
-            });
+            await offlineDb.offlineMutations.delete(mut.id);
+            if (mut.entityType === 'game_session') {
+              const localSessionId = mut.payload?.localSessionId || mut.entityId;
+              if (localSessionId) {
+                await offlineDb.gameSessions.update(localSessionId, {
+                  syncStatus: 'synced',
+                  syncedAt: new Date().toISOString(),
+                  syncError: undefined,
+                }).catch(() => {});
+              }
+            } else if (mut.entityType === 'daily_plan') {
+              const planDate = mut.payload?.planDate || new Date().toISOString().split('T')[0];
+              await offlineDb.dailyPlans.update(`${mut.patientId}_${planDate}`, {
+                syncStatus: 'synced',
+              }).catch(() => {});
+            }
             syncedCount++;
             continue;
           }
 
           if (mut.entityType === 'game_session') {
             const localSessionId = mut.payload.localSessionId || mut.entityId;
-            const { data: existing } = await supabase
-              .from('game_sessions')
-              .select('id')
-              .eq('patient_id', mut.patientId)
-              .filter('metadata->>localSessionId', 'eq', localSessionId)
-              .maybeSingle();
+            let existing: any = null;
+            try {
+              const res = await withTimeout(
+                supabase
+                  .from('game_sessions')
+                  .select('id')
+                  .eq('patient_id', mut.patientId)
+                  .filter('metadata->>localSessionId', 'eq', localSessionId)
+                  .maybeSingle(),
+                6000,
+                'Session check timed out'
+              );
+              existing = res.data;
+            } catch {
+              // Proceed with insert attempt
+            }
 
             if (!existing) {
               const sessionTimestamp = mut.payload.timestamp || mut.createdAt || new Date().toISOString();
               // Insert only confirmed table columns: patient_id, game_id, score, accuracy, duration_seconds, completed_at, metadata
-              const { error: insertError } = await supabase.from('game_sessions').insert({
-                patient_id: mut.patientId,
-                game_id: mut.payload.gameId,
-                score: mut.payload.score || 0,
-                accuracy: mut.payload.accuracy || 0,
-                duration_seconds: mut.payload.durationSeconds || 0,
-                completed_at: sessionTimestamp,
-                metadata: {
-                  ...(mut.payload.metadata || {}),
-                  difficulty: mut.payload.difficulty || mut.payload.metadata?.difficulty || 'saral',
-                  reactionTimeMs: mut.payload.reactionTimeMs || 0,
-                  xpEarned: mut.payload.xpEarned || mut.payload.metadata?.xpEarned || 50,
-                  mistakesCount: mut.payload.mistakesCount || mut.payload.metadata?.mistakesCount || 0,
-                  hintsUsed: mut.payload.hintsUsed || mut.payload.metadata?.hintsUsed || 0,
-                  domainScores: mut.payload.domainScores || mut.payload.metadata?.domainScores || null,
-                  localSessionId,
-                  idempotencyKey: mut.idempotencyKey,
-                },
-              });
+              const { error: insertError } = await withTimeout(
+                supabase.from('game_sessions').insert({
+                  patient_id: mut.patientId,
+                  game_id: mut.payload.gameId,
+                  score: mut.payload.score || 0,
+                  accuracy: mut.payload.accuracy || 0,
+                  duration_seconds: mut.payload.durationSeconds || 0,
+                  completed_at: sessionTimestamp,
+                  metadata: {
+                    ...(mut.payload.metadata || {}),
+                    difficulty: mut.payload.difficulty || mut.payload.metadata?.difficulty || 'saral',
+                    reactionTimeMs: mut.payload.reactionTimeMs || 0,
+                    xpEarned: mut.payload.xpEarned || mut.payload.metadata?.xpEarned || 50,
+                    mistakesCount: mut.payload.mistakesCount || mut.payload.metadata?.mistakesCount || 0,
+                    hintsUsed: mut.payload.hintsUsed || mut.payload.metadata?.hintsUsed || 0,
+                    domainScores: mut.payload.domainScores || mut.payload.metadata?.domainScores || null,
+                    localSessionId,
+                    idempotencyKey: mut.idempotencyKey,
+                  },
+                }),
+                8000,
+                'Game session insert timed out'
+              );
 
               if (insertError) throw insertError;
             }
@@ -395,15 +496,28 @@ class SyncService {
             }).catch(() => {});
 
           } else if (mut.entityType === 'daily_plan') {
-            const planDate = mut.payload.planDate;
+            const planDate = mut.payload.planDate || new Date().toISOString().split('T')[0];
             const incomingCompletedIds: string[] = mut.payload.completedTaskIds || [];
+            const dateObj = new Date(planDate);
+            const dayOfWeek = mut.payload.dayOfWeek || (isNaN(dateObj.getTime()) ? 'Thursday' : dateObj.toLocaleDateString('en-US', { weekday: 'long' }));
+            const focusArea = mut.payload.focusArea || 'Cognitive Agility';
 
-            const { data: remotePlan } = await supabase
-              .from('daily_patient_plans')
-              .select('tasks, earned_xp, is_all_completed')
-              .eq('patient_id', mut.patientId)
-              .eq('plan_date', planDate)
-              .maybeSingle();
+            let remotePlan: any = null;
+            try {
+              const res = await withTimeout(
+                supabase
+                  .from('daily_patient_plans')
+                  .select('tasks, earned_xp, is_all_completed')
+                  .eq('patient_id', mut.patientId)
+                  .eq('plan_date', planDate)
+                  .maybeSingle(),
+                6000,
+                'Remote plan fetch timed out'
+              );
+              remotePlan = res.data;
+            } catch {
+              // Merge with local tasks
+            }
 
             let mergedTasks = mut.payload.tasks || [];
             let mergedCompletedIds = new Set<string>(incomingCompletedIds);
@@ -425,16 +539,23 @@ class SyncService {
               .reduce((sum: number, t: any) => sum + (t.rewardXp || 0), 0);
             const isAllCompleted = mergedTasks.length > 0 && mergedCompletedIds.size === mergedTasks.length;
 
-            const { error: planError } = await supabase
-              .from('daily_patient_plans')
-              .upsert({
-                patient_id: mut.patientId,
-                plan_date: planDate,
-                tasks: mergedTasks,
-                earned_xp: earnedXp,
-                is_all_completed: isAllCompleted,
-                updated_at: new Date().toISOString(),
-              }, { onConflict: 'patient_id,plan_date' });
+            const { error: planError } = await withTimeout(
+              supabase
+                .from('daily_patient_plans')
+                .upsert({
+                  patient_id: mut.patientId,
+                  plan_date: planDate,
+                  day_of_week: dayOfWeek,
+                  focus_area: focusArea,
+                  tasks: mergedTasks,
+                  completed_task_ids: Array.from(mergedCompletedIds),
+                  earned_xp: earnedXp,
+                  is_all_completed: isAllCompleted,
+                  updated_at: new Date().toISOString(),
+                }, { onConflict: 'patient_id,plan_date' }),
+              8000,
+              'Daily plan upsert timed out'
+            );
 
             if (planError) throw planError;
 
@@ -474,51 +595,90 @@ class SyncService {
             }).catch(() => {});
 
           } else if (mut.entityType === 'xp_progress') {
-            const { error: xpError } = await supabase
-              .from('profiles')
-              .update({
-                total_xp: mut.payload.totalXp,
-                level: mut.payload.level,
-                level_title: mut.payload.levelTitle,
-                updated_at: new Date().toISOString(),
-              })
-              .eq('id', mut.patientId);
+            const { error: xpError } = await withTimeout(
+              supabase
+                .from('profiles')
+                .update({
+                  total_xp: mut.payload.totalXp,
+                  level: mut.payload.level,
+                  level_title: mut.payload.levelTitle,
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', mut.patientId),
+              6000,
+              'XP update timed out'
+            );
 
             if (xpError) throw xpError;
 
           } else if (mut.entityType === 'reminder') {
             if (mut.operation === 'update') {
-              const { error: remError } = await supabase
-                .from('reminders')
-                .update({
-                  is_completed: mut.payload.isCompletedToday ?? mut.payload.isCompleted,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq('id', mut.entityId);
+              const { error: remError } = await withTimeout(
+                supabase
+                  .from('reminders')
+                  .update({
+                    is_completed: mut.payload.isCompletedToday ?? mut.payload.isCompleted,
+                    updated_at: new Date().toISOString(),
+                  })
+                  .eq('id', mut.entityId),
+                6000,
+                'Reminder update timed out'
+              );
 
               if (remError) throw remError;
             } else if (mut.operation === 'delete') {
-              const { error: remDelError } = await supabase
-                .from('reminders')
-                .delete()
-                .eq('id', mut.entityId);
+              const { error: remDelError } = await withTimeout(
+                supabase
+                  .from('reminders')
+                  .delete()
+                  .eq('id', mut.entityId),
+                6000,
+                'Reminder deletion timed out'
+              );
 
               if (remDelError) throw remDelError;
             }
 
           } else if (mut.entityType === 'profile') {
-            const { error: profError } = await supabase
-              .from('profiles')
-              .update(mut.payload)
-              .eq('id', mut.patientId);
+            const { error: profError } = await withTimeout(
+              supabase
+                .from('profiles')
+                .upsert(mut.payload, { onConflict: 'id' }),
+              8000,
+              'Profile upsert timed out'
+            );
 
-            if (profError) throw profError;
+            if (profError) {
+              // Safe fallback for core columns if specific columns do not exist
+              const corePayload: Record<string, any> = {};
+              if (mut.payload.full_name) corePayload.full_name = mut.payload.full_name;
+              if (mut.payload.preferred_name) corePayload.preferred_name = mut.payload.preferred_name;
+              if (mut.payload.phone) corePayload.phone = mut.payload.phone;
+              if (mut.payload.streak_days !== undefined) corePayload.streak_days = mut.payload.streak_days;
+              if (mut.payload.total_xp !== undefined) corePayload.total_xp = mut.payload.total_xp;
+              if (mut.payload.level !== undefined) corePayload.level = mut.payload.level;
+              if (mut.payload.level_title) corePayload.level_title = mut.payload.level_title;
+              corePayload.updated_at = new Date().toISOString();
+
+              const { error: fallbackErr } = await withTimeout(
+                supabase.from('profiles').update(corePayload).eq('id', mut.patientId),
+                6000,
+                'Profile update timed out'
+              );
+              if (fallbackErr) throw fallbackErr;
+            }
 
           } else if (mut.entityType === 'family_member') {
             if (mut.operation === 'delete') {
-              await supabase.from('family_members').delete().eq('id', mut.entityId);
+              await withTimeout(
+                supabase.from('family_members').delete().eq('id', mut.entityId),
+                6000
+              );
             } else {
-              await supabase.from('family_members').upsert(mut.payload);
+              await withTimeout(
+                supabase.from('family_members').upsert(mut.payload),
+                6000
+              );
             }
           }
 
@@ -571,33 +731,43 @@ class SyncService {
           }
 
           try {
-            const { data: existing } = await supabase
-              .from('game_sessions')
-              .select('id')
-              .eq('patient_id', session.userId)
-              .filter('metadata->>localSessionId', 'eq', session.id)
-              .maybeSingle();
+            let existing: any = null;
+            try {
+              const res = await withTimeout(
+                supabase
+                  .from('game_sessions')
+                  .select('id')
+                  .eq('patient_id', session.userId)
+                  .filter('metadata->>localSessionId', 'eq', session.id)
+                  .maybeSingle(),
+                6000
+              );
+              existing = res.data;
+            } catch {}
 
             if (!existing) {
               const sessionTimestamp = session.timestamp || new Date().toISOString();
               // Insert only confirmed table columns: patient_id, game_id, score, accuracy, duration_seconds, completed_at, metadata
-              const { error: insertError } = await supabase.from('game_sessions').insert({
-                patient_id: session.userId,
-                game_id: session.gameId,
-                score: session.score || 0,
-                accuracy: session.accuracy || 0,
-                duration_seconds: session.durationSeconds || 0,
-                completed_at: sessionTimestamp,
-                metadata: {
-                  difficulty: session.difficulty || 'saral',
-                  reactionTimeMs: session.reactionTimeMs || 0,
-                  xpEarned: session.xpEarned || 50,
-                  mistakesCount: session.mistakesCount || 0,
-                  hintsUsed: session.hintsUsed || 0,
-                  domainScores: session.domainScores || null,
-                  localSessionId: session.id,
-                },
-              });
+              const { error: insertError } = await withTimeout(
+                supabase.from('game_sessions').insert({
+                  patient_id: session.userId,
+                  game_id: session.gameId,
+                  score: session.score || 0,
+                  accuracy: session.accuracy || 0,
+                  duration_seconds: session.durationSeconds || 0,
+                  completed_at: sessionTimestamp,
+                  metadata: {
+                    difficulty: session.difficulty || 'saral',
+                    reactionTimeMs: session.reactionTimeMs || 0,
+                    xpEarned: session.xpEarned || 50,
+                    mistakesCount: session.mistakesCount || 0,
+                    hintsUsed: session.hintsUsed || 0,
+                    domainScores: session.domainScores || null,
+                    localSessionId: session.id,
+                  },
+                }),
+                8000
+              );
 
               if (insertError) throw insertError;
             }
@@ -623,6 +793,7 @@ class SyncService {
             syncedAt: new Date().toISOString(),
             syncError: undefined,
           });
+          syncedCount++;
         }
       }
 
@@ -640,16 +811,22 @@ class SyncService {
 
         try {
           if (item.type === 'profile_update') {
-            const { error } = await supabase
-              .from('profiles')
-              .update(item.payload)
-              .eq('id', item.entityId);
+            const { error } = await withTimeout(
+              supabase
+                .from('profiles')
+                .update(item.payload)
+                .eq('id', item.entityId),
+              6000
+            );
             if (error) throw error;
           } else if (item.type === 'reminder_toggle') {
-            const { error } = await supabase
-              .from('reminders')
-              .update({ is_completed: item.payload.isCompleted })
-              .eq('id', item.entityId);
+            const { error } = await withTimeout(
+              supabase
+                .from('reminders')
+                .update({ is_completed: item.payload.isCompleted })
+                .eq('id', item.entityId),
+              6000
+            );
             if (error) throw error;
           }
 
@@ -689,11 +866,89 @@ class SyncService {
       return { success: failedCount === 0, syncedCount, error: this.lastError };
     } catch (err: any) {
       this.lastError = this.categorizeError(err);
-      return { success: false, syncedCount, error: this.lastError };
+      return { success: false, syncedCount: 0, error: this.lastError };
     } finally {
       this.isSyncing = false;
       await this.notify();
+
+      if (this.needsSyncAgain && this.isOnline) {
+        this.needsSyncAgain = false;
+        setTimeout(() => {
+          this.syncOfflineChanges(false).catch(() => {});
+        }, 100);
+      }
     }
+  }
+
+  /**
+   * Resets and clears all pending / failed items in the queue.
+   * Useful when stuck items from older sessions or local mock data need flushing.
+   */
+  public async clearPendingQueue(): Promise<void> {
+    try {
+      await offlineDb.offlineMutations.clear();
+      await offlineDb.gameSessions.where('syncStatus').equals('pending').modify({ syncStatus: 'synced' });
+      await offlineDb.gameSessions.where('syncStatus').equals('failed').modify({ syncStatus: 'synced' });
+      await offlineDb.syncQueue.clear();
+      this.lastError = null;
+      this.isSyncing = false;
+      this.lastSyncTime = new Date().toISOString();
+      await offlineDb.syncMetadata.put({ key: 'lastSyncTime', value: this.lastSyncTime });
+      await this.notify();
+    } catch (err) {
+      console.warn('[SyncService] Clear pending queue error:', err);
+    }
+  }
+
+  /**
+   * Returns inspection details for all items currently in the sync queue.
+   */
+  public async getPendingItems(): Promise<Array<{ id: string; type: string; title: string; timestamp: string; error?: string }>> {
+    const items: Array<{ id: string; type: string; title: string; timestamp: string; error?: string }> = [];
+    try {
+      const mutations = await offlineDb.offlineMutations
+        .filter((m) => m.status === 'pending' || m.status === 'failed')
+        .toArray();
+
+      for (const m of mutations) {
+        let title = `${m.entityType} (${m.operation})`;
+        if (m.entityType === 'game_session') {
+          title = `Game Session: ${m.payload?.gameId || m.entityId} (Score: ${m.payload?.score ?? 0})`;
+        } else if (m.entityType === 'daily_plan') {
+          title = `Daily Plan: ${m.payload?.planDate || 'Today'} (${m.payload?.completedTaskIds?.length || 0} tasks completed)`;
+        } else if (m.entityType === 'profile') {
+          title = `Profile Update (${m.payload?.level_title || m.payload?.levelTitle || 'XP Progress'})`;
+        } else if (m.entityType === 'reminder') {
+          title = `Reminder Update`;
+        }
+        items.push({
+          id: m.id,
+          type: m.entityType,
+          title,
+          timestamp: m.createdAt,
+          error: m.lastError,
+        });
+      }
+
+      const sessions = await offlineDb.gameSessions
+        .filter((s) => s.syncStatus === 'pending' || s.syncStatus === 'failed')
+        .toArray();
+
+      for (const s of sessions) {
+        if (!items.some((it) => it.id === s.id)) {
+          items.push({
+            id: s.id,
+            type: 'game_session',
+            title: `Game Session: ${s.gameId} (Score: ${s.score})`,
+            timestamp: s.timestamp,
+            error: s.syncError,
+          });
+        }
+      }
+    } catch {
+      // fallback
+    }
+    return items;
   }
 
   /**

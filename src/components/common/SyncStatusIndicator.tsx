@@ -8,7 +8,11 @@ import {
   CheckCircle2,
   Database,
   Clock,
-  X
+  X,
+  Trash2,
+  Layers,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 export const SyncStatusIndicator: React.FC = () => {
@@ -21,20 +25,46 @@ export const SyncStatusIndicator: React.FC = () => {
   });
   const [showModal, setShowModal] = useState(false);
   const [isManualSyncing, setIsManualSyncing] = useState(false);
+  const [isClearingQueue, setIsClearingQueue] = useState(false);
+  const [showItemDetails, setShowItemDetails] = useState(false);
+  const [pendingItems, setPendingItems] = useState<Array<{ id: string; type: string; title: string; timestamp: string; error?: string }>>([]);
 
   useEffect(() => {
     const unsub = syncService.subscribe((info) => {
       setSyncInfo(info);
+      if (showModal) {
+        syncService.getPendingItems().then(setPendingItems);
+      }
     });
     return unsub;
-  }, []);
+  }, [showModal]);
+
+  useEffect(() => {
+    if (showModal) {
+      syncService.getPendingItems().then(setPendingItems);
+    }
+  }, [showModal, syncInfo.pendingCount]);
 
   const handleManualSync = async () => {
     setIsManualSyncing(true);
     try {
       await syncService.syncPendingData();
+      const updated = await syncService.getPendingItems();
+      setPendingItems(updated);
     } finally {
       setIsManualSyncing(false);
+    }
+  };
+
+  const handleClearQueue = async () => {
+    if (window.confirm('Clear all pending records from local sync queue? Any local scores and plans will remain saved locally.')) {
+      setIsClearingQueue(true);
+      try {
+        await syncService.clearPendingQueue();
+        setPendingItems([]);
+      } finally {
+        setIsClearingQueue(false);
+      }
     }
   };
 
@@ -185,6 +215,57 @@ export const SyncStatusIndicator: React.FC = () => {
               </div>
             </div>
 
+            {/* Pending Records Detailed Inspection Accordion */}
+            {syncInfo.pendingCount > 0 && (
+              <div className="mt-4 border border-amber-200/80 rounded-2xl bg-amber-50/40 p-3">
+                <button
+                  type="button"
+                  onClick={() => setShowItemDetails(!showItemDetails)}
+                  className="w-full flex items-center justify-between text-xs font-bold text-amber-900 cursor-pointer"
+                >
+                  <span className="flex items-center gap-1.5">
+                    <Layers className="w-3.5 h-3.5 text-amber-700" />
+                    Inspect {syncInfo.pendingCount} Queued Record(s)
+                  </span>
+                  {showItemDetails ? <ChevronUp className="w-4 h-4 text-amber-700" /> : <ChevronDown className="w-4 h-4 text-amber-700" />}
+                </button>
+
+                {showItemDetails && (
+                  <div className="mt-3 space-y-2 max-h-40 overflow-y-auto pr-1">
+                    {pendingItems.map((item) => (
+                      <div key={item.id} className="p-2.5 rounded-xl bg-white border border-amber-200/70 text-xs shadow-2xs">
+                        <div className="font-bold text-gray-800 truncate">{item.title}</div>
+                        <div className="flex items-center justify-between mt-1 text-[10px] text-gray-500">
+                          <span className="uppercase tracking-wider font-semibold text-amber-800 bg-amber-100/70 px-1.5 py-0.5 rounded">
+                            {item.type}
+                          </span>
+                          <span>{formatSyncTime(item.timestamp)}</span>
+                        </div>
+                        {item.error && (
+                          <div className="mt-1 text-[11px] text-rose-600 font-medium truncate">
+                            {item.error}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Stuck State Force-Retry Helper */}
+            {syncInfo.state === 'syncing' && !isManualSyncing && (
+              <div className="mt-3 text-center">
+                <button
+                  type="button"
+                  onClick={handleManualSync}
+                  className="text-xs text-sathi-600 hover:text-sathi-700 font-bold underline cursor-pointer"
+                >
+                  Taking longer than expected? Click to force sync
+                </button>
+              </div>
+            )}
+
             {/* Action Buttons */}
             <div className="mt-6 flex flex-col sm:flex-row gap-2.5">
               <button
@@ -196,6 +277,20 @@ export const SyncStatusIndicator: React.FC = () => {
                 <RefreshCw className={`w-4 h-4 ${isManualSyncing ? 'animate-spin' : ''}`} />
                 <span>{syncInfo.state === 'sync-failed' ? 'Retry Synchronization' : 'Sync Now with Cloud'}</span>
               </button>
+
+              {syncInfo.pendingCount > 0 && (
+                <button
+                  type="button"
+                  onClick={handleClearQueue}
+                  disabled={isClearingQueue || isManualSyncing}
+                  className="py-3 px-3 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 font-bold text-xs sm:text-sm flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  title="Clear stuck pending queue and mark changes as saved locally"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span className="hidden sm:inline">Clear Queue</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={() => setShowModal(false)}
