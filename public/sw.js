@@ -1,9 +1,10 @@
-// MIND SATHI Service Worker (PWA Offline Support v2)
-const CACHE_NAME = 'mind-sathi-cache-v2';
+// MIND SATHI Service Worker (PWA Offline Support v3)
+const CACHE_NAME = 'mind-sathi-cache-v3';
 
 const STATIC_ASSETS = [
   '/',
   '/index.html',
+  '/caregiver.html',
   '/favicon.png',
   '/logo_icon.png',
   '/logo.png',
@@ -27,6 +28,7 @@ self.addEventListener('activate', (event) => {
       return Promise.all(
         keys.map((key) => {
           if (key !== CACHE_NAME) {
+            console.log('[SW] Purging outdated cache:', key);
             return caches.delete(key);
           }
         })
@@ -47,19 +49,22 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Handle SPA Navigation requests: Network-first with immediate offline fallback to cached /index.html
+  // Handle SPA Navigation requests: Network-first with immediate offline fallback to cached shell
   if (event.request.mode === 'navigate') {
+    const isCaregiver = url.pathname.startsWith('/caregiver');
+    const fallbackHtml = isCaregiver ? '/caregiver.html' : '/index.html';
+
     event.respondWith(
       fetch(event.request)
         .then((networkResponse) => {
           if (networkResponse && networkResponse.status === 200) {
             const copy = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => cache.put('/index.html', copy));
+            caches.open(CACHE_NAME).then((cache) => cache.put(fallbackHtml, copy));
           }
           return networkResponse;
         })
         .catch(async () => {
-          const cached = await caches.match('/index.html');
+          const cached = await caches.match(fallbackHtml);
           if (cached) return cached;
           const rootCached = await caches.match('/');
           if (rootCached) return rootCached;

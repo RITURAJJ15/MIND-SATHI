@@ -54,10 +54,12 @@ export const SyncStatusIndicator: React.FC = () => {
     switch (syncInfo.state) {
       case 'online-synced':
         return {
-          icon: <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />,
-          label: syncInfo.pendingCount > 0 ? `Syncing (${syncInfo.pendingCount} pending)...` : 'Online — Data Synced',
-          shortLabel: syncInfo.pendingCount > 0 ? 'Syncing...' : 'Synced',
-          containerClass: 'bg-emerald-50 text-emerald-900 border-emerald-300 hover:bg-emerald-100',
+          icon: <span className={`w-2.5 h-2.5 rounded-full ${syncInfo.pendingCount > 0 ? 'bg-amber-500' : 'bg-emerald-500 animate-pulse'} shrink-0`} />,
+          label: syncInfo.pendingCount > 0 ? `Online — ${syncInfo.pendingCount} record(s) queued for sync` : 'Online — Data Synced',
+          shortLabel: syncInfo.pendingCount > 0 ? `Pending (${syncInfo.pendingCount})` : 'Synced',
+          containerClass: syncInfo.pendingCount > 0
+            ? 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100'
+            : 'bg-emerald-50 text-emerald-900 border-emerald-300 hover:bg-emerald-100',
         };
       case 'offline':
         return {
@@ -75,9 +77,9 @@ export const SyncStatusIndicator: React.FC = () => {
         };
       case 'sync-failed':
         return {
-          icon: <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping shrink-0" />,
-          label: "Some changes couldn't sync yet. We'll retry.",
-          shortLabel: 'Retry Sync',
+          icon: <span className="w-2.5 h-2.5 rounded-full bg-rose-500 shrink-0" />,
+          label: syncInfo.lastError || "Some changes couldn't sync yet. Click to retry.",
+          shortLabel: syncInfo.pendingCount > 0 ? `Retry (${syncInfo.pendingCount})` : 'Retry Sync',
           containerClass: 'bg-rose-50 text-rose-900 border-rose-300 hover:bg-rose-100',
         };
     }
@@ -101,8 +103,8 @@ export const SyncStatusIndicator: React.FC = () => {
 
       {/* Sync Details Modal */}
       {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-fade-in">
-          <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl border border-gray-200 p-6 relative overflow-hidden animate-scale-up">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/50 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white w-full max-w-md max-h-[90vh] overflow-y-auto rounded-3xl shadow-2xl border border-gray-200 p-5 sm:p-6 relative animate-scale-up">
             {/* Header */}
             <div className="flex items-center justify-between pb-4 border-b border-gray-100">
               <div className="flex items-center gap-2.5">
@@ -142,7 +144,7 @@ export const SyncStatusIndicator: React.FC = () => {
               <div>
                 <div className="text-sm font-black tracking-tight">{btnConfig.label}</div>
                 <p className="text-xs mt-0.5 text-gray-600 font-medium">
-                  {syncInfo.state === 'online-synced' && 'All game sessions and patient records are backed up to Supabase cloud.'}
+                  {syncInfo.state === 'online-synced' && (syncInfo.pendingCount > 0 ? 'Pending changes are safely saved locally and will sync to cloud.' : 'All game sessions and patient records are backed up to Supabase cloud.')}
                   {syncInfo.state === 'offline' && 'Internet disconnected. All gameplay, scores, and reminders are safely stored on device.'}
                   {syncInfo.state === 'syncing' && 'Reconnecting to Supabase... Uploading local pending records.'}
                   {syncInfo.state === 'sync-failed' && (syncInfo.lastError || 'Could not reach server. Data remains saved locally.')}
@@ -184,7 +186,7 @@ export const SyncStatusIndicator: React.FC = () => {
             </div>
 
             {/* Action Buttons */}
-            <div className="mt-6 flex gap-2.5">
+            <div className="mt-6 flex flex-col sm:flex-row gap-2.5">
               <button
                 type="button"
                 onClick={handleManualSync}

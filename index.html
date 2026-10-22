@@ -18,7 +18,10 @@
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js').catch((err) => {
+          navigator.serviceWorker.register('/sw.js').then((registration) => {
+            // Check for service worker updates immediately to prevent stale client caches
+            registration.update().catch(() => {});
+          }).catch((err) => {
             console.warn('[PWA] Service Worker registration failed:', err);
           });
         });

@@ -64,8 +64,8 @@ class GeminiService {
         const { data, error } = await supabase
           .from('game_sessions')
           .select('*')
-          .or(`patient_id.eq.${userId},user_id.eq.${userId}`)
-          .order('created_at', { ascending: false })
+          .eq('patient_id', userId)
+          .order('completed_at', { ascending: false })
           .limit(20);
 
         if (!error && data) {
@@ -511,8 +511,8 @@ class GeminiService {
         const { data: gData } = await supabase
           .from('game_sessions')
           .select('*')
-          .or(`patient_id.eq.${patientId},user_id.eq.${patientId}`)
-          .order('created_at', { ascending: false })
+          .eq('patient_id', patientId)
+          .order('completed_at', { ascending: false })
           .limit(30);
 
         if (gData) {

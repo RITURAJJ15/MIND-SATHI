@@ -171,8 +171,8 @@ class GameService {
         const { data, error } = await supabase
           .from('game_sessions')
           .select('*')
-          .or(`patient_id.eq.${userId},user_id.eq.${userId}`)
-          .order('created_at', { ascending: false });
+          .eq('patient_id', userId)
+          .order('completed_at', { ascending: false });
 
         if (data && !error && data.length > 0) {
           const mapped: GameSession[] = data.map((d) => ({

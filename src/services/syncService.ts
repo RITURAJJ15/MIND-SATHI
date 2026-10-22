@@ -41,7 +41,7 @@ class SyncService {
       this.lastError = null;
       this.notify();
       // Automatically detect reconnection and start synchronization
-      this.syncOfflineChanges();
+      this.syncOfflineChanges(true);
     });
 
     window.addEventListener('offline', () => {
@@ -54,7 +54,7 @@ class SyncService {
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible' && this.isOnline) {
-          this.syncOfflineChanges();
+          this.syncOfflineChanges(true);
         }
       });
     }
@@ -64,7 +64,7 @@ class SyncService {
       if (this.isOnline && !this.isSyncing) {
         const pending = await this.getPendingCount();
         if (pending > 0) {
-          this.syncOfflineChanges();
+          this.syncOfflineChanges(false);
         }
       }
     }, 30000);
@@ -82,7 +82,7 @@ class SyncService {
     // Initial sync check if online
     if (this.isOnline) {
       setTimeout(() => {
-        this.syncOfflineChanges();
+        this.syncOfflineChanges(true);
       }, 1500);
     }
   }
@@ -98,18 +98,102 @@ class SyncService {
     this.listeners.forEach((l) => l(info));
   }
 
+  /**
+   * Sanitizes diagnostic error details without exposing sensitive health data or tokens.
+   */
+  private categorizeError(err: any): string {
+    if (!err) return 'Unknown synchronization error';
+    const msg = typeof err === 'string' ? err : err.message || '';
+    const code = String(err.code || '');
+
+    if (code === '401' || msg.includes('JWT') || msg.includes('token') || msg.includes('auth') || msg.includes('Unauthorized')) {
+      return 'Authentication session expired. Please sign in again.';
+    }
+    if (code === '42703' || msg.includes('column') || msg.includes('does not exist')) {
+      return 'Server schema mismatch. Safe fallback applied.';
+    }
+    if (code === '23503' || msg.includes('foreign key')) {
+      return 'Account record synchronization pending server link.';
+    }
+    if (code === '23505' || msg.includes('duplicate key') || msg.includes('unique constraint')) {
+      return 'Duplicate record acknowledged by server.';
+    }
+    if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Network interrupted') || msg.includes('offline') || code === 'FETCH_ERROR') {
+      return 'Network connection interrupted. Will retry automatically.';
+    }
+    if (code === '429' || msg.includes('rate limit')) {
+      return 'Sync rate limited by server. Retrying shortly.';
+    }
+
+    return 'Server sync error. Changes safely preserved on device.';
+  }
+
+  /**
+   * Checks whether an item is eligible for background retry based on exponential backoff.
+   */
+  private isEligibleForRetry(
+    item: { retryCount?: number; updatedAt?: string; lastError?: string; error?: string },
+    isManual: boolean
+  ): boolean {
+    if (isManual) return true;
+    const retries = item.retryCount || 0;
+    if (retries === 0) return true;
+    if (retries >= 5) return false; // Bound automatic retries to 5 attempts; require manual sync or reconnect
+    const lastTimestamp = item.updatedAt ? new Date(item.updatedAt).getTime() : 0;
+    const backoffDelay = Math.min(1000 * Math.pow(2, retries), 60000);
+    return Date.now() - lastTimestamp >= backoffDelay;
+  }
+
+  /**
+   * Checks if any pending records are currently in 'failed' status.
+   */
+  public async hasFailedRecords(): Promise<boolean> {
+    try {
+      const failedMutations = await offlineDb.offlineMutations
+        .filter((m) => m.status === 'failed')
+        .count();
+      if (failedMutations > 0) return true;
+
+      const failedSessions = await offlineDb.gameSessions
+        .filter((s) => s.syncStatus === 'failed')
+        .count();
+      if (failedSessions > 0) return true;
+
+      const failedQueue = await offlineDb.syncQueue
+        .filter((q) => q.status === 'failed')
+        .count();
+      return failedQueue > 0;
+    } catch {
+      return false;
+    }
+  }
+
   public async getPendingCount(): Promise<number> {
     try {
       const pendingMutations = await offlineDb.offlineMutations
         .filter((m) => m.status === 'pending' || m.status === 'failed')
-        .count();
+        .toArray();
+
+      const mutationGameSessionIds = new Set<string>();
+      for (const m of pendingMutations) {
+        if (m.entityType === 'game_session') {
+          const sid = m.payload?.localSessionId || m.entityId;
+          if (sid) mutationGameSessionIds.add(sid);
+        }
+      }
+
       const pendingSessions = await offlineDb.gameSessions
         .filter((s) => s.syncStatus === 'pending' || s.syncStatus === 'failed')
-        .count();
+        .toArray();
+
+      // Deduplicate: game sessions already tracked via offlineMutations are not counted twice
+      const uniquePendingSessions = pendingSessions.filter((s) => !mutationGameSessionIds.has(s.id));
+
       const pendingQueue = await offlineDb.syncQueue
         .filter((q) => q.status === 'pending' || q.status === 'failed')
         .count();
-      return pendingMutations + pendingSessions + pendingQueue;
+
+      return pendingMutations.length + uniquePendingSessions.length + pendingQueue;
     } catch {
       return 0;
     }
@@ -123,10 +207,13 @@ class SyncService {
       state = 'offline';
     } else if (this.isSyncing) {
       state = 'syncing';
-    } else if (this.lastError && pendingCount > 0) {
-      state = 'sync-failed';
     } else if (pendingCount > 0) {
-      state = 'syncing'; // In queue waiting to sync
+      if (this.lastError) {
+        state = 'sync-failed';
+      } else {
+        const hasFailed = await this.hasFailedRecords();
+        state = hasFailed ? 'sync-failed' : 'online-synced';
+      }
     } else {
       state = 'online-synced';
     }
@@ -205,7 +292,7 @@ class SyncService {
 
     // If online, immediately trigger background sync
     if (this.isOnline) {
-      this.syncOfflineChanges().catch((err) => {
+      this.syncOfflineChanges(false).catch((err) => {
         console.warn('[SyncService] Background sync note:', err);
       });
     }
@@ -220,7 +307,7 @@ class SyncService {
    * - Retries temporary failures without losing unsynced items.
    * - Dispatches 'mind_sathi_sync_completed' event on completion.
    */
-  public async syncOfflineChanges(): Promise<{ success: boolean; syncedCount: number; error?: string | null }> {
+  public async syncOfflineChanges(isManual: boolean = false): Promise<{ success: boolean; syncedCount: number; error?: string | null }> {
     if (!this.isOnline) {
       this.lastError = 'Device is currently offline.';
       await this.notify();
@@ -232,10 +319,11 @@ class SyncService {
     }
 
     this.isSyncing = true;
-    this.lastError = null;
     await this.notify();
 
     let syncedCount = 0;
+    let failedCount = 0;
+    let lastFailureReason: string | null = null;
 
     try {
       // 1. Process durable offlineMutations
@@ -248,6 +336,11 @@ class SyncService {
 
       for (const mut of mutations) {
         const isRealUser = mut.patientId && mut.patientId.includes('-') && mut.patientId.length > 20;
+
+        if (!this.isEligibleForRetry(mut, isManual)) {
+          failedCount++;
+          continue;
+        }
 
         try {
           if (!isRealUser) {
@@ -271,27 +364,25 @@ class SyncService {
 
             if (!existing) {
               const sessionTimestamp = mut.payload.timestamp || mut.createdAt || new Date().toISOString();
+              // Insert only confirmed table columns: patient_id, game_id, score, accuracy, duration_seconds, completed_at, metadata
               const { error: insertError } = await supabase.from('game_sessions').insert({
-                user_id: mut.patientId,
                 patient_id: mut.patientId,
                 game_id: mut.payload.gameId,
                 score: mut.payload.score || 0,
                 accuracy: mut.payload.accuracy || 0,
-                reaction_time_ms: mut.payload.reactionTimeMs || 0,
                 duration_seconds: mut.payload.durationSeconds || 0,
-                difficulty: mut.payload.difficulty || mut.payload.metadata?.difficulty || 'saral',
-                completed: true,
-                xp_earned: mut.payload.xpEarned || mut.payload.metadata?.xpEarned || 50,
-                mistakes_count: mut.payload.mistakesCount || mut.payload.metadata?.mistakesCount || 0,
-                hints_used: mut.payload.hintsUsed || mut.payload.metadata?.hintsUsed || 0,
-                domain_scores: mut.payload.domainScores || mut.payload.metadata?.domainScores || null,
+                completed_at: sessionTimestamp,
                 metadata: {
                   ...(mut.payload.metadata || {}),
+                  difficulty: mut.payload.difficulty || mut.payload.metadata?.difficulty || 'saral',
+                  reactionTimeMs: mut.payload.reactionTimeMs || 0,
+                  xpEarned: mut.payload.xpEarned || mut.payload.metadata?.xpEarned || 50,
+                  mistakesCount: mut.payload.mistakesCount || mut.payload.metadata?.mistakesCount || 0,
+                  hintsUsed: mut.payload.hintsUsed || mut.payload.metadata?.hintsUsed || 0,
+                  domainScores: mut.payload.domainScores || mut.payload.metadata?.domainScores || null,
                   localSessionId,
                   idempotencyKey: mut.idempotencyKey,
                 },
-                completed_at: sessionTimestamp,
-                created_at: sessionTimestamp,
               });
 
               if (insertError) throw insertError;
@@ -300,6 +391,7 @@ class SyncService {
             await offlineDb.gameSessions.update(localSessionId, {
               syncStatus: 'synced',
               syncedAt: new Date().toISOString(),
+              syncError: undefined,
             }).catch(() => {});
 
           } else if (mut.entityType === 'daily_plan') {
@@ -434,11 +526,25 @@ class SyncService {
           await offlineDb.offlineMutations.delete(mut.id);
           syncedCount++;
         } catch (mutErr: any) {
-          console.warn('[SyncService] Failed to sync mutation:', mut.id, mutErr);
+          failedCount++;
+          const safeErrorMsg = this.categorizeError(mutErr);
+          lastFailureReason = safeErrorMsg;
+
+          if (mut.entityType === 'game_session') {
+            const localSessionId = mut.payload?.localSessionId || mut.entityId;
+            if (localSessionId) {
+              await offlineDb.gameSessions.update(localSessionId, {
+                syncStatus: 'failed',
+                syncError: safeErrorMsg,
+              }).catch(() => {});
+            }
+          }
+
+          console.warn('[SyncService] Failed to sync mutation:', mut.id, safeErrorMsg);
           await offlineDb.offlineMutations.update(mut.id, {
             status: 'failed',
             retryCount: (mut.retryCount || 0) + 1,
-            lastError: mutErr?.message || 'Sync operation failed',
+            lastError: safeErrorMsg,
             updatedAt: new Date().toISOString(),
           });
         }
@@ -450,7 +556,20 @@ class SyncService {
         .toArray();
 
       for (const session of pendingSessions) {
+        // Skip if this session is already represented in offlineMutations to avoid duplicate processing
+        const alreadyInMutations = mutations.some(
+          (m) => m.entityType === 'game_session' && (m.payload?.localSessionId === session.id || m.entityId === session.id)
+        );
+        if (alreadyInMutations) {
+          continue;
+        }
+
         if (session.userId && session.userId.includes('-') && session.userId.length > 20) {
+          if (!this.isEligibleForRetry({ retryCount: 0, lastError: session.syncError }, isManual)) {
+            failedCount++;
+            continue;
+          }
+
           try {
             const { data: existing } = await supabase
               .from('game_sessions')
@@ -461,31 +580,23 @@ class SyncService {
 
             if (!existing) {
               const sessionTimestamp = session.timestamp || new Date().toISOString();
+              // Insert only confirmed table columns: patient_id, game_id, score, accuracy, duration_seconds, completed_at, metadata
               const { error: insertError } = await supabase.from('game_sessions').insert({
-                user_id: session.userId,
                 patient_id: session.userId,
                 game_id: session.gameId,
                 score: session.score || 0,
                 accuracy: session.accuracy || 0,
-                reaction_time_ms: session.reactionTimeMs || 0,
                 duration_seconds: session.durationSeconds || 0,
-                difficulty: session.difficulty || 'saral',
-                completed: true,
-                xp_earned: session.xpEarned || 50,
-                mistakes_count: session.mistakesCount || 0,
-                hints_used: session.hintsUsed || 0,
-                domain_scores: session.domainScores || null,
+                completed_at: sessionTimestamp,
                 metadata: {
-                  mistakesCount: session.mistakesCount,
-                  hintsUsed: session.hintsUsed,
-                  difficulty: session.difficulty,
-                  xpEarned: session.xpEarned,
-                  domainScores: session.domainScores,
-                  reactionTimeMs: session.reactionTimeMs,
+                  difficulty: session.difficulty || 'saral',
+                  reactionTimeMs: session.reactionTimeMs || 0,
+                  xpEarned: session.xpEarned || 50,
+                  mistakesCount: session.mistakesCount || 0,
+                  hintsUsed: session.hintsUsed || 0,
+                  domainScores: session.domainScores || null,
                   localSessionId: session.id,
                 },
-                completed_at: sessionTimestamp,
-                created_at: sessionTimestamp,
               });
 
               if (insertError) throw insertError;
@@ -498,15 +609,19 @@ class SyncService {
             });
             syncedCount++;
           } catch (err: any) {
+            failedCount++;
+            const safeErrorMsg = this.categorizeError(err);
+            lastFailureReason = safeErrorMsg;
             await offlineDb.gameSessions.update(session.id, {
               syncStatus: 'failed',
-              syncError: err.message || 'Sync failed',
+              syncError: safeErrorMsg,
             });
           }
         } else {
           await offlineDb.gameSessions.update(session.id, {
             syncStatus: 'synced',
             syncedAt: new Date().toISOString(),
+            syncError: undefined,
           });
         }
       }
@@ -518,6 +633,11 @@ class SyncService {
 
       for (const item of queueItems) {
         if (!item.id) continue;
+        if (!this.isEligibleForRetry({ retryCount: item.retryCount, error: item.error }, isManual)) {
+          failedCount++;
+          continue;
+        }
+
         try {
           if (item.type === 'profile_update') {
             const { error } = await supabase
@@ -536,34 +656,43 @@ class SyncService {
           await offlineDb.syncQueue.delete(item.id);
           syncedCount++;
         } catch (queueErr: any) {
+          failedCount++;
+          const safeErrorMsg = this.categorizeError(queueErr);
+          lastFailureReason = safeErrorMsg;
           await offlineDb.syncQueue.update(item.id, {
             status: 'failed',
             retryCount: (item.retryCount || 0) + 1,
-            error: queueErr.message || 'Sync error',
+            error: safeErrorMsg,
           });
         }
       }
 
-      // 4. Update last successful sync time
-      this.lastSyncTime = new Date().toISOString();
-      await offlineDb.syncMetadata.put({ key: 'lastSyncTime', value: this.lastSyncTime });
+      // Update last successful sync time ONLY when at least 1 record synced or queue is clean
+      if (syncedCount > 0 || (failedCount === 0 && mutations.length === 0)) {
+        this.lastSyncTime = new Date().toISOString();
+        await offlineDb.syncMetadata.put({ key: 'lastSyncTime', value: this.lastSyncTime });
+      }
 
-      // 5. Dispatch completion event
+      if (failedCount > 0) {
+        this.lastError = lastFailureReason || `${failedCount} record(s) failed to synchronize.`;
+      } else {
+        this.lastError = null;
+      }
+
+      // Dispatch completion event
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('mind_sathi_sync_completed', {
-          detail: { syncedCount, timestamp: this.lastSyncTime }
+          detail: { syncedCount, failedCount, timestamp: this.lastSyncTime }
         }));
       }
 
-      this.isSyncing = false;
-      this.lastError = null;
-      await this.notify();
-      return { success: true, syncedCount };
+      return { success: failedCount === 0, syncedCount, error: this.lastError };
     } catch (err: any) {
-      this.isSyncing = false;
-      this.lastError = err?.message || 'Synchronization failed. Network interrupted.';
-      await this.notify();
+      this.lastError = this.categorizeError(err);
       return { success: false, syncedCount, error: this.lastError };
+    } finally {
+      this.isSyncing = false;
+      await this.notify();
     }
   }
 
@@ -571,7 +700,7 @@ class SyncService {
    * Alias for backward compatibility.
    */
   public async syncPendingData(): Promise<{ success: boolean; syncedCount: number; error?: string | null }> {
-    return this.syncOfflineChanges();
+    return this.syncOfflineChanges(true);
   }
 
   /**
